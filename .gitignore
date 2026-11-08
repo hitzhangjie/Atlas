@@ -1,0 +1,20 @@
+# build outputs
+bin/
+obj/
+app/
+dist/
+artifacts/
+*.user
+*.suo
+
+# local diagnostics / probe outputs
+tools/SensorProbe/probe-*.txt
+tools/FanProbe/fan-probe.txt
+tools/OpenProbe/open-probe.txt
+tools/cli-list.txt
+tools/*.log
+tools/**/*.log
+tools/PawnIO_setup.exe
+
+# local preview / UI verification workspace
+.preview/

@@ -1,0 +1,12 @@
+* text=auto
+
+# Windows 脚本保持 CRLF，避免在 cmd / Windows PowerShell 下出现行尾问题
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+*.ps1   text eol=crlf
+
+# 二进制素材不做行尾转换
+*.png   binary
+*.ico   binary
+*.exe   binary
+*.zip   binary
