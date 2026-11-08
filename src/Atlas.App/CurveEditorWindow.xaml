@@ -1,4 +1,4 @@
-﻿<Window x:Class="Atlas.App.CurveEditorWindow"
+<Window x:Class="Atlas.App.CurveEditorWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:Atlas.App"
@@ -39,7 +39,7 @@
                         <TextBlock Text="温度 → PWM 曲线" FontSize="15" FontWeight="SemiBold"
                                    Foreground="{StaticResource TextBrush}"/>
                         <TextBlock Margin="0,4,0,0" FontSize="11.5" Foreground="{StaticResource MutedBrush}"
-                                   Text="拖动圆点调整曲线 · 双击空白处添加控制点 · 右键删除控制点"/>
+                                   Text="拖动圆点调整曲线 · 双击空白处添加控制点 · 右键删除控制点 · 两端按最近控制点保持"/>
                     </StackPanel>
                     <Border Style="{StaticResource ChipBorder}" HorizontalAlignment="Right" VerticalAlignment="Center">
                         <StackPanel Orientation="Horizontal">

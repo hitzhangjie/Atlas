@@ -1,4 +1,4 @@
-﻿using Atlas.Core;
+using Atlas.Core;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Input;
@@ -44,6 +44,17 @@ public sealed class CurveEditor : FrameworkElement
     });
     private static readonly Pen PointPen = FrozenPen(new Pen(Brushes.White, 1.6));
     private static readonly Pen HoverPen = FrozenPen(new Pen(Frozen(Color.FromArgb(0x66, 0x46, 0xD6, 0xE6)), 4));
+
+    /// <summary>曲线两端（无控制点区间）的虚线延长线：引擎在那里沿用最近控制点的值。</summary>
+    private static readonly Pen HoldPen = FrozenPen(new Pen(Frozen(Color.FromArgb(0xB0, 0x5F, 0xB3, 0xFF)), 1.6)
+    {
+        DashStyle = new DashStyle(new double[] { 4, 4 }, 0),
+        StartLineCap = PenLineCap.Round,
+        EndLineCap = PenLineCap.Round,
+    });
+
+    /// <summary>「保持」区域的淡填充，和用户定义区间做视觉区分。</summary>
+    private static readonly Brush HoldFillBrush = Frozen(Color.FromArgb(0x14, 0x4D, 0x9E, 0xFF));
 
     private readonly List<CurvePoint> _points = new();
     private int _dragIndex = -1;
@@ -119,16 +130,24 @@ public sealed class CurveEditor : FrameworkElement
 
         if (_points.Count == 0) return;
 
-        // 曲线下方渐变填充
+        var first = ToScreen(_points[0].Temp, _points[0].Percent);
+        var last = ToScreen(_points[^1].Temp, _points[^1].Percent);
+        var leftEdge = ToScreen(MinTemp, _points[0].Percent);
+        var rightEdge = ToScreen(MaxTemp, _points[^1].Percent);
+
+        // 曲线两端没有控制点的区间：引擎按最近控制点的值保持。
+        // 这里补上淡填充 + 虚线延长线 + 说明，避免看起来「20–30 °C / 80–100 °C 不受控制」。
+        DrawHoldRegion(dc, plot, leftEdge, first, _points[0], isLower: true);
+        DrawHoldRegion(dc, plot, last, rightEdge, _points[^1], isLower: false);
+
+        // 控制点之间的曲线下方渐变填充
         var area = new StreamGeometry();
         using (var ctx = area.Open())
         {
-            var first = ToScreen(_points[0].Temp, _points[0].Percent);
             ctx.BeginFigure(new Point(first.X, plot.Bottom), true, true);
             ctx.LineTo(first, true, false);
             foreach (var point in _points.Skip(1))
                 ctx.LineTo(ToScreen(point.Temp, point.Percent), true, false);
-            var last = ToScreen(_points[^1].Temp, _points[^1].Percent);
             ctx.LineTo(new Point(last.X, plot.Bottom), true, false);
         }
         area.Freeze();
@@ -145,7 +164,7 @@ public sealed class CurveEditor : FrameworkElement
             var line = new StreamGeometry();
             using (var ctx = line.Open())
             {
-                ctx.BeginFigure(ToScreen(_points[0].Temp, _points[0].Percent), false, false);
+                ctx.BeginFigure(first, false, false);
                 foreach (var point in _points.Skip(1))
                     ctx.LineTo(ToScreen(point.Temp, point.Percent), true, false);
             }
@@ -179,6 +198,44 @@ public sealed class CurveEditor : FrameworkElement
         {
             DrawTooltip(dc, _points[_hoverIndex], ToScreen(_points[_hoverIndex].Temp, _points[_hoverIndex].Percent));
         }
+    }
+
+    /// <summary>
+    /// 画曲线一端「保持」区域：控制点之外的温度按最近控制点的值输出，
+    /// 用淡填充 + 虚线延长线 + 文字说明表示这不是用户定义的控制区间。
+    /// </summary>
+    private void DrawHoldRegion(DrawingContext dc, Rect plot, Point edge, Point point,
+        CurvePoint endpoint, bool isLower)
+    {
+        if (Math.Abs(edge.X - point.X) < 1) return;
+
+        var leftX = Math.Min(edge.X, point.X);
+        var rightX = Math.Max(edge.X, point.X);
+        var y = point.Y;
+
+        var region = new StreamGeometry();
+        using (var ctx = region.Open())
+        {
+            ctx.BeginFigure(new Point(leftX, plot.Bottom), true, true);
+            ctx.LineTo(new Point(leftX, y), true, false);
+            ctx.LineTo(new Point(rightX, y), true, false);
+            ctx.LineTo(new Point(rightX, plot.Bottom), true, false);
+        }
+        region.Freeze();
+        dc.DrawGeometry(HoldFillBrush, null, region);
+        dc.DrawLine(HoldPen, new Point(leftX, y), new Point(rightX, y));
+
+        // 区间太窄时只画虚线，避免文字和圆点挤在一起
+        var label = MakeText(
+            $"{(isLower ? "≤" : "≥")}{endpoint.Temp:0}° 保持{endpoint.Percent:0}%",
+            10.0,
+            TextHiBrush);
+        if (rightX - leftX < label.Width + 4) return;
+
+        var textX = (leftX + rightX) / 2 - label.Width / 2;
+        var aboveY = y - label.Height - 6;
+        var textY = aboveY >= plot.Top + 2 ? aboveY : y + 6;
+        dc.DrawText(label, new Point(textX, textY));
     }
 
     private void DrawTooltip(DrawingContext dc, CurvePoint point, Point anchor)
