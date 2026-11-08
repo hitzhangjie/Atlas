@@ -27,6 +27,8 @@ public partial class MainWindow : Window
     private AtlasConfig _config = new();
     private FanEngine? _engine;
     private ICollectionView? _fanView;
+    private ViewRefreshGate? _viewGate;
+    private HashSet<FanRow>? _visibleRowsSnapshot;
     private bool _hideZeroRpm;
     private bool _initialized;
     private bool _closing;
@@ -36,6 +38,16 @@ public partial class MainWindow : Window
         InitializeComponent();
         WindowChromeHelper.Enable(this);
         StartupMark("InitializeComponent");
+
+        // 下拉列表 / 单元格编辑 / 拖拽期间，把「会重建表格行容器」的过滤刷新延后，避免打断用户操作
+        FanGrid.BeginningEdit += (_, _) => _viewGate?.NotifyEditStarted();
+        FanGrid.CellEditEnding += (_, _) =>
+        {
+            _viewGate?.NotifyEditEnded();
+            QueueFlushPendingViewRefresh();
+        };
+        LostMouseCapture += (_, _) => QueueFlushPendingViewRefresh();
+        PreviewMouseUp += (_, _) => QueueFlushPendingViewRefresh();
 
         _config = AtlasConfig.Load();
         StartupMark("config loaded");
@@ -91,6 +103,7 @@ public partial class MainWindow : Window
             var rowWatch = Stopwatch.StartNew();
             BuildRows();
             _fanView = CollectionViewSource.GetDefaultView(_rows);
+            _viewGate = new ViewRefreshGate(_fanView, IsAnyDropDownOpen);
             FanGrid.ItemsSource = _fanView;
             StartupMark($"rows built ({rowWatch.ElapsedMilliseconds}ms)");
 
@@ -177,22 +190,27 @@ public partial class MainWindow : Window
 
             foreach (var row in _rows) row.Refresh();
 
-            // DataGrid 正在编辑单元格时不允许 Refresh（会抛 InvalidOperationException），跳过本次即可
-            if (_hideZeroRpm && _fanView is not null)
-            {
-                try { _fanView.Refresh(); }
-                catch (InvalidOperationException) { }
-            }
+            // 只在可见行集合真的变化时才重建视图；否则每秒 Refresh 会打断用户正在操作的下拉列表 / 滑块
+            UpdateRowVisibility();
+            _viewGate?.FlushPending();
 
+            var cpuPackage = FindTemperature(HardwareType.Cpu, "CPU Package");
             UpdateTempCard(CpuTempText, CpuTempState, CpuTempBar,
-                FindTemperature(HardwareType.Cpu, "CPU Package"), 75, 88, AccentBrush, "无数据");
+                cpuPackage, 75, 88, AccentBrush, "无数据");
+            UpdateCpuCoreDetail(cpuPackage);
+
+            // 主指标用核心温度（和驱动 / 游戏内显示一致），热点 / 显存只作为散热参考放在副标题
+            var gpuCore = FindGpuTemperature("GPU Core");
+            var gpuHotspot = FindGpuTemperature("GPU Hot Spot", "GPU Hotspot");
+            var gpuMemory = FindGpuTemperature("GPU Memory Junction", "GPU Memory");
             UpdateTempCard(GpuTempText, GpuTempState, GpuTempBar,
-                FindTemperature(HardwareType.GpuNvidia, "GPU Core"), 78, 88, CyanBrush, "无数据");
-            UpdateTempCard(HotspotText, HotspotState, HotspotBar,
-                FindTemperature(HardwareType.GpuNvidia, "GPU Hot Spot"), 88, 97, AmberBrush, "无数据");
+                gpuCore, 78, 88, CyanBrush, "无数据");
+            UpdateGpuDetail(gpuCore, gpuHotspot, gpuMemory);
+
             UpdateTempCard(DimmText, DimmState, DimmBar,
-                _memory.MaxDimmTemperature, 55, 65, DimmBrush,
+                _memory.MaxDimmTemperature, 65, 80, DimmBrush,
                 _memory.IsReady ? "无数据" : "加载中");
+            UpdateDimmDetail();
 
             var controlling = _engine.ActiveChannels > 0;
             StatusDot.Fill = controlling ? GreenBrush : MutedBrush;
@@ -228,6 +246,128 @@ public partial class MainWindow : Window
             if (sensor != null) return sensor.Value;
         }
         return null;
+    }
+
+    /// <summary>按名称优先级在任意 GPU（NVIDIA / AMD / Intel）上找温度传感器。</summary>
+    private float? FindGpuTemperature(params string[] sensorNames)
+    {
+        foreach (var name in sensorNames)
+        {
+            foreach (var hw in _hardware.Hardware.Where(h =>
+                         h.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel))
+            {
+                var sensor = hw.Sensors.FirstOrDefault(s =>
+                    s.SensorType == SensorType.Temperature && s.Name == name && s.Value.HasValue);
+                if (sensor != null) return sensor.Value;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>某类 CPU 温度传感器（如 P-Core / E-Core）中的最高值。</summary>
+    private float? FindCpuCoreMax(string namePrefix)
+    {
+        float? max = null;
+        foreach (var hw in _hardware.Hardware.Where(h => h.HardwareType == HardwareType.Cpu))
+        {
+            foreach (var sensor in hw.Sensors)
+            {
+                if (sensor.SensorType != SensorType.Temperature || !sensor.Value.HasValue) continue;
+                if (!sensor.Name.StartsWith(namePrefix, StringComparison.OrdinalIgnoreCase)) continue;
+                max = max is null ? sensor.Value : Math.Max(max.Value, sensor.Value.Value);
+            }
+        }
+        return max;
+    }
+
+    /// <summary>
+    /// CPU 卡片副标题：主指标 Package 放第一个，再补充 P-core / E-core 最高温。
+    /// 非混合架构 CPU 退化成「Core Max」。
+    /// </summary>
+    private void UpdateCpuCoreDetail(float? package)
+    {
+        var parts = new List<string>(3);
+        if (package.HasValue) parts.Add($"Package {package.Value:0.0}°");
+
+        var pCore = FindCpuCoreMax("P-Core");
+        var eCore = FindCpuCoreMax("E-Core");
+        if (pCore.HasValue) parts.Add($"P-core {pCore.Value:0.0}°");
+        if (eCore.HasValue) parts.Add($"E-core {eCore.Value:0.0}°");
+
+        if (!pCore.HasValue && !eCore.HasValue)
+        {
+            var coreMax = FindTemperature(HardwareType.Cpu, "CPU Core Max") ?? FindCpuCoreMax("CPU Core #");
+            if (coreMax.HasValue) parts.Add($"Core Max {coreMax.Value:0.0}°");
+        }
+
+        CpuCoreDetailText.Text = parts.Count > 0 ? string.Join(" · ", parts) : "Package 传感器";
+    }
+
+    /// <summary>内存卡片副标题：主指标（最高温）不再重复，只列每根内存条的槽位温度。</summary>
+    private void UpdateDimmDetail()
+    {
+        if (!_memory.IsReady)
+        {
+            DimmDetailText.Text = "加载中";
+            return;
+        }
+
+        var dimms = _memory.Dimms;
+        if (dimms.Count == 0)
+        {
+            DimmDetailText.Text = "SPD 传感器";
+            return;
+        }
+
+        DimmDetailText.Text = string.Join(" · ",
+            dimms.Select((d, i) => $"Slot{DimmSlotNumber(d.Name, i)} {d.Value:0.0}°"));
+    }
+
+    /// <summary>槽位号：优先用传感器名里的编号（LHM 的 DIMM #0 → Slot1），否则按顺序编号。</summary>
+    private static int DimmSlotNumber(string name, int order)
+    {
+        var digits = new string(name.Where(char.IsDigit).ToArray());
+        return int.TryParse(digits, out var number) ? number + 1 : order + 1;
+    }
+
+    /// <summary>
+    /// GPU 卡片副标题：主指标（GPU 核心温度）放第一个，再补充 Hotspot / Memory 这些工程师指标。
+    /// 正常情况下保持灰色；只有明显异常（热点 / 温差 / 显存过高）才变色提醒。
+    /// </summary>
+    private void UpdateGpuDetail(float? core, float? hotspot, float? memory)
+    {
+        var parts = new List<string>(3);
+
+        if (core.HasValue) parts.Add($"GPU {core.Value:0.0}°");
+
+        if (hotspot.HasValue)
+        {
+            var delta = core.HasValue ? hotspot.Value - core.Value : (float?)null;
+            parts.Add(delta.HasValue
+                ? $"Hotspot {hotspot.Value:0.0}° ({(delta.Value >= 0 ? "+" : "")}{delta.Value:0.0}°)"
+                : $"Hotspot {hotspot.Value:0.0}°");
+        }
+
+        if (memory.HasValue) parts.Add($"Memory {memory.Value:0.0}°");
+
+        if (parts.Count == 0)
+        {
+            GpuDetailText.Text = "GPU 传感器";
+            GpuDetailText.Foreground = DimBrush;
+            return;
+        }
+
+        GpuDetailText.Text = string.Join(" · ", parts);
+        GpuDetailText.Foreground = GpuDetailBrush(core, hotspot, memory);
+    }
+
+    private Brush GpuDetailBrush(float? core, float? hotspot, float? memory)
+    {
+        var delta = core.HasValue && hotspot.HasValue ? hotspot.Value - core.Value : (float?)null;
+
+        if (hotspot is >= 97 || memory is >= 100 || delta is >= 35) return RedBrush;
+        if (hotspot is >= 88 || memory is >= 90 || delta is >= 25) return AmberBrush;
+        return MutedBrush;
     }
 
     /// <summary>刷新一张温度卡片：数值、状态文字、进度条和颜色。</summary>
@@ -288,12 +428,55 @@ public partial class MainWindow : Window
             ? new Predicate<object>(o => o is FanRow { IsZeroRpm: false })
             : null;
 
-        try { _fanView.Refresh(); }
-        catch (InvalidOperationException) { }
+        _visibleRowsSnapshot = _hideZeroRpm
+            ? new HashSet<FanRow>(_rows.Where(r => !r.IsZeroRpm))
+            : null;
+
+        // 用户主动切换过滤条件，立即生效（点击开关本身已经关掉了下拉列表）
+        _viewGate?.RequestRefresh();
+        _viewGate?.FlushPending();
 
         StatusText.Text = _hideZeroRpm
             ? "已隐藏 0 RPM 通道（风扇转起来后会自动重新出现）"
             : "已显示全部通道";
+    }
+
+    /// <summary>
+    /// 「隐藏 0 RPM」时只比较可见行集合，变化了才重建视图。
+    /// 之前每秒无条件调用 <see cref="ICollectionView.Refresh"/>，会重建所有行容器，
+    /// 正在展开的模式 / 温度源下拉列表会被立刻收起。
+    /// </summary>
+    private void UpdateRowVisibility()
+    {
+        if (!_hideZeroRpm || _viewGate is null) return;
+
+        var visible = new HashSet<FanRow>(_rows.Where(r => !r.IsZeroRpm));
+        if (_visibleRowsSnapshot is not null && visible.SetEquals(_visibleRowsSnapshot)) return;
+
+        _visibleRowsSnapshot = visible;
+        _viewGate.RequestRefresh();
+    }
+
+    private void QueueFlushPendingViewRefresh()
+    {
+        if (_viewGate is null) return;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => _viewGate?.FlushPending()));
+    }
+
+    /// <summary>表格里是否有下拉列表正展开（有的话本轮不重建视图，否则会把列表收起来）。</summary>
+    private bool IsAnyDropDownOpen() => FanGrid.IsLoaded && HasOpenComboBox(FanGrid);
+
+    private static bool HasOpenComboBox(DependencyObject parent)
+    {
+        if (parent is ComboBox { IsDropDownOpen: true }) return true;
+
+        var count = VisualTreeHelper.GetChildrenCount(parent);
+        for (var i = 0; i < count; i++)
+        {
+            if (HasOpenComboBox(VisualTreeHelper.GetChild(parent, i))) return true;
+        }
+
+        return false;
     }
 
     private void EditCurve_Click(object sender, RoutedEventArgs e)

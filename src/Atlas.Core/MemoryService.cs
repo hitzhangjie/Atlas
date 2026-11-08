@@ -2,6 +2,9 @@ using LibreHardwareMonitor.Hardware;
 
 namespace Atlas.Core;
 
+/// <summary>一根内存条（DIMM）的温度读数。</summary>
+public sealed record DimmTemperature(string Name, float Value);
+
 /// <summary>
 /// 独立的 DIMM 温度读取服务。
 /// DDR5 SPD/SMBus 初始化非常慢（实测约 4.5 秒），所以不放在主初始化路径上，
@@ -12,6 +15,7 @@ public sealed class MemoryService : IDisposable
     private readonly object _gate = new();
     private Computer? _computer;
     private System.Threading.Timer? _timer;
+    private List<DimmTemperature> _dimms = new();
     private float? _maxDimmTemperature;
     private bool _disposed;
 
@@ -21,6 +25,12 @@ public sealed class MemoryService : IDisposable
     public float? MaxDimmTemperature
     {
         get { lock (_gate) return _maxDimmTemperature; }
+    }
+
+    /// <summary>每根内存条的温度（按名称排序）；未加载完成时为空。</summary>
+    public IReadOnlyList<DimmTemperature> Dimms
+    {
+        get { lock (_gate) return _dimms.ToArray(); }
     }
 
     /// <summary>打开内存传感器并启动后台刷新；应在后台线程调用（会阻塞约 4–5 秒）。</summary>
@@ -63,6 +73,7 @@ public sealed class MemoryService : IDisposable
         {
             if (_disposed || _computer is null) return;
 
+            var dimms = new List<DimmTemperature>();
             float? max = null;
             foreach (var hardware in _computer.Hardware)
             {
@@ -73,10 +84,14 @@ public sealed class MemoryService : IDisposable
                 {
                     if (sensor.SensorType != SensorType.Temperature) continue;
                     if (!sensor.Name.StartsWith("DIMM") || !sensor.Value.HasValue) continue;
+
+                    dimms.Add(new DimmTemperature(sensor.Name, sensor.Value.Value));
                     max = max is null ? sensor.Value : Math.Max(max.Value, sensor.Value.Value);
                 }
             }
 
+            dimms.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+            _dimms = dimms;
             _maxDimmTemperature = max;
         }
     }
