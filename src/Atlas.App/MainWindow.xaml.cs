@@ -17,7 +17,6 @@ namespace Atlas.App;
 
 public partial class MainWindow : Window
 {
-    private const string AutoStartTaskName = "AtlasFan";
     private static readonly DateTime ProcessStartTime = Process.GetCurrentProcess().StartTime;
 
     private readonly HardwareService _hardware = new();
@@ -158,9 +157,6 @@ public partial class MainWindow : Window
 
             // 内存/DIMM 温度初始化很慢（约 4.5s），后台加载，不阻塞风扇控制
             _ = LoadMemoryAsync();
-
-            // 计划任务查询会起进程，放后台，别拖慢界面
-            await Task.Run(UpdateAutoStartButton);
         }
         catch (Exception ex)
         {
@@ -189,7 +185,7 @@ public partial class MainWindow : Window
     {
         FanGrid.IsEnabled = enabled;
         HideZeroButton.IsEnabled = enabled;
-        AutoStartButton.IsEnabled = enabled;
+        SettingsButton.IsEnabled = enabled;
         CopyCurveButton.IsEnabled = enabled;
         RestoreButton.IsEnabled = enabled;
         SceneBarControl.Interactable = enabled;
@@ -569,7 +565,7 @@ public partial class MainWindow : Window
 
         if (FanGrid.SelectedItem is not FanRow source)
         {
-            MessageBox.Show("请先在表格里选中作为模板的通道行，再点「复制曲线…」。",
+            MessageBox.Show("请先在表格里选中作为模板的通道行，再点「复制曲线」。",
                 "Atlas", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -1185,65 +1181,20 @@ public partial class MainWindow : Window
         RefreshSceneBar();
     }
 
-    private void AutoStartButton_Click(object sender, RoutedEventArgs e)
+    private void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        var installed = IsAutoStartInstalled();
-        if (installed)
-        {
-            RunSchtasks($"/delete /tn \"{AutoStartTaskName}\" /f");
-            StatusText.Text = "已移除开机自启";
-        }
-        else
-        {
-            var exe = Environment.ProcessPath;
-            if (string.IsNullOrEmpty(exe))
-            {
-                StatusText.Text = "无法确定程序路径，开机自启安装失败";
-                return;
-            }
+        if (!_initialized) return;
 
-            var command = $"/create /tn \"{AutoStartTaskName}\" /tr \"\\\"{exe}\\\"\" /sc onlogon /rl highest /f";
-            var exitCode = RunSchtasks(command);
-            StatusText.Text = exitCode == 0
-                ? $"已安装开机自启（登录时以管理员权限启动 {exe}）"
-                : $"安装开机自启失败（schtasks 退出码 {exitCode}）";
-        }
-
-        UpdateAutoStartButton();
-    }
-
-    private void UpdateAutoStartButton()
-    {
         try
         {
-            var installed = IsAutoStartInstalled();
-            Dispatcher.Invoke(() =>
-                AutoStartTextBlock.Text = installed ? "移除开机自启" : "安装开机自启");
+            var dialog = new SettingsWindow { Owner = this };
+            dialog.ShowDialog();
         }
-        catch { }
-    }
-
-    private static bool IsAutoStartInstalled() =>
-        RunSchtasks($"/query /tn \"{AutoStartTaskName}\"") == 0;
-
-    private static int RunSchtasks(string arguments)
-    {
-        try
+        catch (Exception ex)
         {
-            using var process = Process.Start(new ProcessStartInfo("schtasks.exe", arguments)
-            {
-                CreateNoWindow = true,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            });
-            if (process == null) return -1;
-            process.WaitForExit();
-            return process.ExitCode;
-        }
-        catch
-        {
-            return -1;
+            LogCrash(ex);
+            MessageBox.Show($"打开设置失败：{ex.Message}", "Atlas",
+                MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
