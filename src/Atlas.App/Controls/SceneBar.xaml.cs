@@ -1,64 +1,74 @@
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 
 namespace Atlas.App.Controls;
 
-/// <summary>内置场景（只读）在 <see cref="SceneBar"/> 里的一个条目。</summary>
-public sealed class SceneBarSceneItem
+/// <summary>下拉列表里的条目类型：内置场景（只读）/「我的配置」/ 未归档占位。</summary>
+public enum SceneBarChoiceKind
 {
-    public string Id { get; init; } = "";
-    public string Name { get; init; } = "";
-    public string Description { get; init; } = "";
-    public bool IsActive { get; init; }
+    BuiltInScene,
+    Profile,
+    Draft,
 }
 
-/// <summary>「我的配置」下拉框里的一个条目。</summary>
-public sealed class SceneBarProfileItem
+/// <summary>「场景 / 配置」下拉框里的一个条目。</summary>
+public sealed class SceneBarChoiceItem
 {
     public string Id { get; init; } = "";
+    public SceneBarChoiceKind Kind { get; init; }
     public string Name { get; init; } = "";
-    public string DisplayName { get; init; } = ""; // 例如 "夜间安静 · 11-09 14:20"
+
+    /// <summary>类型小徽标文案：内置 · 只读 / 我的 / 未归档。</summary>
+    public string TypeLabel { get; init; } = "";
+
+    /// <summary>完整展示名（含来源/更新时间），用于 tooltip。</summary>
+    public string DisplayName { get; init; } = "";
+
+    /// <summary>名称后的灰色补充信息（目前用于「我的配置」的更新时间），为空则不显示。</summary>
+    public string DetailText { get; init; } = "";
+
+    public bool IsReadOnly { get; init; }
 }
 
 /// <summary>
-/// SceneBar 的一次完整渲染状态。MainWindow 每秒可能大量构造它，
-/// 因此 Render 内部会做签名比较：状态没变就完全不碰可视化树（避免收起用户正在展开的下拉框）。
+/// SceneBar 的一次完整渲染状态。MainWindow 每次轮询都可能构造它，
+/// Render 内部会做签名比较：状态没变就完全不碰可视化树（避免收起用户正在展开的下拉框）。
 /// </summary>
 public sealed class SceneBarViewState
 {
-    public IReadOnlyList<SceneBarSceneItem> Scenes { get; init; } = Array.Empty<SceneBarSceneItem>();
-    public IReadOnlyList<SceneBarProfileItem> Profiles { get; init; } = Array.Empty<SceneBarProfileItem>();
-    public string? SelectedProfileId { get; init; }
-    public string StatusText { get; init; } = "";   // 例如 "当前：内置场景 · 均衡"
-    public string StatusHint { get; init; } = "";   // 例如 "已修改，尚未保存为配置"
+    public IReadOnlyList<SceneBarChoiceItem> Choices { get; init; } = Array.Empty<SceneBarChoiceItem>();
+
+    /// <summary>当前选中项 Id；<see cref="SceneBar.DraftChoiceId"/> 表示「未归档」占位。</summary>
+    public string? SelectedChoiceId { get; init; }
+
+    /// <summary>当前方案是否有未保存的修改（只影响小琥珀徽标，不改变选中项）。</summary>
     public bool IsDirty { get; init; }
+
     public bool Interactable { get; init; } = true;
 }
 
 /// <summary>
-/// 主窗口里「场景模板 / 我的配置 / 当前方案」的紧凑单行卡片。
-/// 所有业务动作都通过事件上抛给 MainWindow，控件本身只负责展示状态。
+/// 主窗口里「场景 / 配置」的紧凑单行卡片（v2）。
+///
+/// 设计要点：
+///  - 只有一个下拉列表，内置场景 + 我的配置 + 未归档占位都放在里面，类型用徽标区分；
+///  - 用户选择下拉项即视为「立即切换」，控件只上抛 <see cref="ChoiceSelected"/>，由 MainWindow 决定是否确认/回退；
+///  - 用户取消切换时，MainWindow 调 <see cref="SetSelectedChoice"/> 把下拉框回退到当前项（不发事件）；
+///  - 所有业务动作都通过事件上抛给 MainWindow，控件本身只负责展示状态。
 /// 公开 <see cref="Render(SceneBarViewState)"/> 便于离屏渲染测试。
 /// </summary>
 public partial class SceneBar : UserControl
 {
-    private static readonly SceneBarProfileItem EmptyProfileItem = new()
-    {
-        Id = "",
-        Name = "还没有配置",
-        DisplayName = "还没有配置",
-    };
+    /// <summary>当前方案没有来源（未归档）时，下拉里占位项的固定 Id。</summary>
+    public const string DraftChoiceId = "draft";
 
-    private readonly List<Button> _sceneButtons = new();
-    private readonly List<SceneBarProfileItem> _profileItems = new();
-
+    private readonly List<SceneBarChoiceItem> _choiceItems = new();
     private bool _suppressEvents;
     private bool _interactable = true;
-    private bool _hasProfiles;
-    private string? _selectedProfileId;
+    private string? _selectedChoiceId;
     private string _lastSignature = "\0";
-    private string _profileItemsSignature = "\0";
+    private string _choicesSignature = "\0";
 
     public SceneBar()
     {
@@ -66,18 +76,18 @@ public partial class SceneBar : UserControl
         ApplyEnabledState();
     }
 
-    public event EventHandler<string>? SceneApplyRequested;       // scene.Id
-    public event EventHandler<string>? ProfileApplyRequested;     // profile.Id
-    public event EventHandler<string?>? ProfileSelectionChanged;  // 用户下拉选择变化
+    /// <summary>用户在下拉列表里选择了某一项（已过滤程序化选择），参数是 <see cref="SceneBarChoiceItem.Id"/>。</summary>
+    public event EventHandler<string>? ChoiceSelected;
+
     public event EventHandler? SaveProfileRequested;
     public event EventHandler? UpdateProfileRequested;
     public event EventHandler? RenameProfileRequested;
     public event EventHandler? DeleteProfileRequested;
 
-    /// <summary>当前下拉框里选中的「我的配置」Id；没有配置时为 null。</summary>
-    public string? SelectedProfileId => _selectedProfileId;
+    /// <summary>当前下拉框里选中的条目 Id；无选中项时为 null。</summary>
+    public string? SelectedChoiceId => _selectedChoiceId;
 
-    /// <summary>false = 初始化期间禁用所有交互按钮（状态仍然显示）。</summary>
+    /// <summary>false = 初始化期间禁用所有交互（状态仍然显示）。</summary>
     public bool Interactable
     {
         get => _interactable;
@@ -95,16 +105,38 @@ public partial class SceneBar : UserControl
         if (state is null) return;
 
         var signature = BuildSignature(state);
-        if (string.Equals(signature, _lastSignature, StringComparison.Ordinal)) return;
+        if (string.Equals(signature, _lastSignature, StringComparison.Ordinal) &&
+            IsSelectionInSync(state.SelectedChoiceId))
+        {
+            return;
+        }
+
         _lastSignature = signature;
 
         _suppressEvents = true;
         try
         {
-            UpdateSceneButtons(state);
-            UpdateProfileCombo(state);
-            UpdateStatus(state);
+            UpdateChoices(state);
+            SelectChoice(state.SelectedChoiceId);
+            UpdateDirtyBadge(state);
             _interactable = state.Interactable;
+            ApplyEnabledState();
+        }
+        finally
+        {
+            _suppressEvents = false;
+        }
+    }
+
+    /// <summary>
+    /// 程序化设置下拉选中项（用于用户取消切换时回退），不会触发 <see cref="ChoiceSelected"/>。
+    /// </summary>
+    public void SetSelectedChoice(string? id)
+    {
+        _suppressEvents = true;
+        try
+        {
+            SelectChoice(id);
             ApplyEnabledState();
         }
         finally
@@ -115,172 +147,130 @@ public partial class SceneBar : UserControl
 
     private static string BuildSignature(SceneBarViewState state)
     {
-        var builder = new System.Text.StringBuilder(256);
-        builder.Append(state.StatusText).Append('\u0001')
-            .Append(state.StatusHint).Append('\u0001')
-            .Append(state.IsDirty).Append('\u0001')
+        var builder = new StringBuilder(256);
+        builder.Append(state.IsDirty).Append('\u0001')
             .Append(state.Interactable).Append('\u0001')
-            .Append(state.SelectedProfileId ?? "").Append('\u0001');
+            .Append(state.SelectedChoiceId ?? "").Append('\u0001');
 
-        foreach (var scene in state.Scenes)
+        foreach (var choice in state.Choices)
         {
-            builder.Append(scene.Id).Append('\u0002')
-                .Append(scene.Name).Append('\u0002')
-                .Append(scene.Description).Append('\u0002')
-                .Append(scene.IsActive).Append('\u0003');
-        }
-
-        builder.Append('\u0001');
-        foreach (var profile in state.Profiles)
-        {
-            builder.Append(profile.Id).Append('\u0002')
-                .Append(profile.Name).Append('\u0002')
-                .Append(profile.DisplayName).Append('\u0003');
+            builder.Append(choice.Id).Append('\u0002')
+                .Append((int)choice.Kind).Append('\u0002')
+                .Append(choice.Name).Append('\u0002')
+                .Append(choice.TypeLabel).Append('\u0002')
+                .Append(choice.DisplayName).Append('\u0002')
+                .Append(choice.DetailText).Append('\u0002')
+                .Append(choice.IsReadOnly).Append('\u0003');
         }
 
         return builder.ToString();
     }
 
-    private void UpdateSceneButtons(SceneBarViewState state)
+    private static string BuildChoicesSignature(IReadOnlyList<SceneBarChoiceItem> choices)
     {
-        var scenes = state.Scenes;
-
-        // 只保留需要数量的按钮；场景数量在 Core 里是固定的，这里做通用处理。
-        while (_sceneButtons.Count > scenes.Count)
+        var builder = new StringBuilder(256);
+        foreach (var choice in choices)
         {
-            var last = _sceneButtons[^1];
-            SceneButtonsPanel.Children.Remove(last);
-            _sceneButtons.RemoveAt(_sceneButtons.Count - 1);
+            builder.Append(choice.Id).Append('\u0002')
+                .Append((int)choice.Kind).Append('\u0002')
+                .Append(choice.Name).Append('\u0002')
+                .Append(choice.TypeLabel).Append('\u0002')
+                .Append(choice.DisplayName).Append('\u0002')
+                .Append(choice.DetailText).Append('\u0002')
+                .Append(choice.IsReadOnly).Append('\u0003');
         }
 
-        while (_sceneButtons.Count < scenes.Count)
+        return builder.ToString();
+    }
+
+    /// <summary>只有条目真的变化时才换 ItemsSource；仅仅选中项/已修改变化不会重建下拉。</summary>
+    private void UpdateChoices(SceneBarViewState state)
+    {
+        var choices = state.Choices ?? Array.Empty<SceneBarChoiceItem>();
+        var signature = BuildChoicesSignature(choices);
+        if (string.Equals(signature, _choicesSignature, StringComparison.Ordinal)) return;
+
+        _choicesSignature = signature;
+        _choiceItems.Clear();
+        _choiceItems.AddRange(choices);
+        ChoiceCombo.ItemsSource = _choiceItems.ToList();
+    }
+
+    private void SelectChoice(string? id)
+    {
+        SceneBarChoiceItem? match = null;
+        if (!string.IsNullOrEmpty(id))
         {
-            var button = new Button
-            {
-                Style = (Style)FindResource("SmallGhostButton"),
-                Padding = new Thickness(11, 4, 11, 4),
-                Margin = new Thickness(0, 0, 5, 0),
-                FontSize = 11.5,
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            ToolTipService.SetShowOnDisabled(button, true);
-            button.Click += SceneButton_Click;
-            SceneButtonsPanel.Children.Add(button);
-            _sceneButtons.Add(button);
+            match = _choiceItems.FirstOrDefault(c =>
+                        string.Equals(c.Id, id, StringComparison.Ordinal))
+                    ?? _choiceItems.FirstOrDefault(c =>
+                        string.Equals(c.Id, id, StringComparison.OrdinalIgnoreCase));
         }
 
-        for (var i = 0; i < scenes.Count; i++)
+        ChoiceCombo.SelectedItem = match;
+        _selectedChoiceId = match?.Id;
+    }
+
+    private bool IsSelectionInSync(string? id)
+    {
+        var expected = id ?? "";
+        var actual = _selectedChoiceId ?? "";
+        if (!string.Equals(expected, actual, StringComparison.Ordinal)) return false;
+
+        return expected.Length == 0
+            ? ChoiceCombo.SelectedIndex < 0
+            : ChoiceCombo.SelectedItem is SceneBarChoiceItem item &&
+              string.Equals(item.Id, expected, StringComparison.Ordinal);
+    }
+
+    private SceneBarChoiceKind? SelectedKind
+    {
+        get
         {
-            var item = scenes[i];
-            var button = _sceneButtons[i];
-
-            button.Content = item.Name;
-            button.Tag = item.Id;
-            button.ToolTip = $"{item.Name} · 所有未锁定通道套用「{item.Name}」模板（只读）";
-
-            // 激活高亮只在「未修改」时生效：已修改说明当前方案已偏离该场景。
-            // 直接设本地属性，避免依赖 UserControl.Resources 里对 App 资源的 BasedOn 解析。
-            if (item.IsActive && !state.IsDirty)
-            {
-                button.Background = (Brush)FindResource("AccentSoftBrush");
-                button.BorderBrush = (Brush)FindResource("AccentBrush");
-                button.Foreground = (Brush)FindResource("TextBrush");
-            }
-            else
-            {
-                button.ClearValue(BackgroundProperty);
-                button.ClearValue(BorderBrushProperty);
-                button.ClearValue(ForegroundProperty);
-            }
+            if (string.IsNullOrEmpty(_selectedChoiceId)) return null;
+            var item = _choiceItems.FirstOrDefault(c =>
+                string.Equals(c.Id, _selectedChoiceId, StringComparison.Ordinal));
+            return item?.Kind;
         }
     }
 
-    private void UpdateProfileCombo(SceneBarViewState state)
+    private void UpdateDirtyBadge(SceneBarViewState state)
     {
-        var profileItemsSignature = string.Join("\u0001",
-            state.Profiles.Select(p => p.Id + "\u0002" + p.DisplayName));
-
-        if (!string.Equals(profileItemsSignature, _profileItemsSignature, StringComparison.Ordinal))
+        DirtyBadge.Visibility = state.IsDirty ? Visibility.Visible : Visibility.Collapsed;
+        DirtyBadge.ToolTip = SelectedKind switch
         {
-            _profileItemsSignature = profileItemsSignature;
-            _profileItems.Clear();
-            _profileItems.AddRange(state.Profiles);
-            _hasProfiles = _profileItems.Count > 0;
-
-            if (_hasProfiles)
-            {
-                ProfileCombo.ItemsSource = _profileItems;
-            }
-            else
-            {
-                ProfileCombo.ItemsSource = new[] { EmptyProfileItem };
-                ProfileCombo.SelectedIndex = 0;
-            }
-        }
-
-        if (_hasProfiles)
-        {
-            var selected = _profileItems.FirstOrDefault(p =>
-                               string.Equals(p.Id, state.SelectedProfileId, StringComparison.Ordinal))
-                           ?? _profileItems[0];
-            ProfileCombo.SelectedItem = selected;
-            _selectedProfileId = selected.Id;
-        }
-        else
-        {
-            ProfileCombo.SelectedIndex = 0;
-            _selectedProfileId = null;
-        }
-    }
-
-    private void UpdateStatus(SceneBarViewState state)
-    {
-        StatusTextBlock.Text = state.StatusText ?? "";
-        StatusTextBlock.ToolTip = state.StatusText ?? "";
-
-        // 窄窗口下不再把提示小字挤在状态 chip 里（会被裁切），改为 tooltip 展示完整语义
-        StatusChip.ToolTip = string.IsNullOrEmpty(state.StatusHint)
-            ? "当前方案 = 正在编辑并实时生效的设置。套用场景/配置后若再改动扇通道，会标记为「已修改」，需要另存为配置才能保留。"
-            : state.StatusHint + "\n当前方案 = 正在编辑并实时生效的设置。套用场景/配置后若再改动扇通道，会标记为「已修改」，需要另存为配置才能保留。";
-
-        StatusDot.Fill = state.IsDirty
-            ? (Brush)FindResource("AmberBrush")
-            : (Brush)FindResource("GreenBrush");
+            SceneBarChoiceKind.BuiltInScene =>
+                "内置场景只读：当前改动需要先复制为「我的配置」才能保存。",
+            SceneBarChoiceKind.Profile =>
+                "当前「我的配置」有未保存的修改，点「更新」保存。",
+            _ => "当前方案有未保存的修改，点「保存当前…」另存为「我的配置」。",
+        };
     }
 
     private void ApplyEnabledState()
     {
-        SceneButtonsPanel.IsEnabled = _interactable;
-        ProfileCombo.IsEnabled = _interactable && _hasProfiles;
-        ApplyProfileButton.IsEnabled = _interactable && _hasProfiles;
+        ChoiceCombo.IsEnabled = _interactable;
         SaveProfileButton.IsEnabled = _interactable;
-        UpdateProfileButton.IsEnabled = _interactable && _hasProfiles;
-        RenameProfileButton.IsEnabled = _interactable && _hasProfiles;
-        DeleteProfileButton.IsEnabled = _interactable && _hasProfiles;
+
+        var isProfile = SelectedKind == SceneBarChoiceKind.Profile;
+        UpdateProfileButton.IsEnabled = _interactable && isProfile;
+        RenameProfileButton.IsEnabled = _interactable && isProfile;
+        DeleteProfileButton.IsEnabled = _interactable && isProfile;
     }
 
-    private void SceneButton_Click(object sender, RoutedEventArgs e)
+    private void ChoiceCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_suppressEvents) return;
-        if (sender is not Button { Tag: string sceneId } || string.IsNullOrEmpty(sceneId)) return;
-        SceneApplyRequested?.Invoke(this, sceneId);
-    }
-
-    private void ProfileCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_suppressEvents) return;
-        if (ProfileCombo.SelectedItem is not SceneBarProfileItem item) return;
+        if (ChoiceCombo.SelectedItem is not SceneBarChoiceItem item) return;
         if (string.IsNullOrEmpty(item.Id)) return;
-        if (string.Equals(_selectedProfileId, item.Id, StringComparison.Ordinal)) return;
+        if (string.Equals(_selectedChoiceId, item.Id, StringComparison.Ordinal)) return;
 
-        _selectedProfileId = item.Id;
-        ProfileSelectionChanged?.Invoke(this, item.Id);
-    }
+        _selectedChoiceId = item.Id;
+        ApplyEnabledState();
 
-    private void ApplyProfileButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (_suppressEvents || !_hasProfiles || string.IsNullOrEmpty(_selectedProfileId)) return;
-        ProfileApplyRequested?.Invoke(this, _selectedProfileId);
+        // 先收起下拉再弹确认框，避免 MessageBox 打开在展开的 Popup 之上
+        ChoiceCombo.IsDropDownOpen = false;
+        ChoiceSelected?.Invoke(this, item.Id);
     }
 
     private void SaveProfileButton_Click(object sender, RoutedEventArgs e)
@@ -291,19 +281,22 @@ public partial class SceneBar : UserControl
 
     private void UpdateProfileButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_suppressEvents || !_hasProfiles || string.IsNullOrEmpty(_selectedProfileId)) return;
+        if (_suppressEvents) return;
+        if (SelectedKind != SceneBarChoiceKind.Profile) return;
         UpdateProfileRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private void RenameProfileButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_suppressEvents || !_hasProfiles || string.IsNullOrEmpty(_selectedProfileId)) return;
+        if (_suppressEvents) return;
+        if (SelectedKind != SceneBarChoiceKind.Profile) return;
         RenameProfileRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private void DeleteProfileButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_suppressEvents || !_hasProfiles || string.IsNullOrEmpty(_selectedProfileId)) return;
+        if (_suppressEvents) return;
+        if (SelectedKind != SceneBarChoiceKind.Profile) return;
         DeleteProfileRequested?.Invoke(this, EventArgs.Empty);
     }
 }

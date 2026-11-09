@@ -212,17 +212,6 @@
                                     </StackPanel>
                                 </Button>
 
-                                <Button x:Name="SaveButton" Style="{StaticResource PrimaryButton}" AutomationProperties.Name="保存修改"
-                                        Click="SaveButton_Click" Margin="6,0,4,0" Padding="12,6"
-                                        ToolTip="把当前设置写入 config.json；不会创建「我的配置」。">
-                                    <StackPanel Orientation="Horizontal">
-                                        <Path Data="{StaticResource IconSave}" Style="{StaticResource IconPath}"
-                                              Stroke="{StaticResource AccentTextBrush}" Width="14" Height="14"
-                                              Margin="0,0,6,0" VerticalAlignment="Center"/>
-                                        <TextBlock Text="保存修改" VerticalAlignment="Center"/>
-                                    </StackPanel>
-                                </Button>
-
                                 <Button x:Name="RestoreButton" Style="{StaticResource AmberGhostButton}" AutomationProperties.Name="全部恢复 BIOS 默认"
                                         Click="RestoreButton_Click" Margin="2,0,0,0">
                                     <StackPanel Orientation="Horizontal">
@@ -312,7 +301,8 @@
                                             <DataTemplate>
                                                 <ComboBox ItemsSource="{Binding Modes}"
                                                           SelectedItem="{Binding SelectedMode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                          ToolTip="{Binding SelectedMode.Display}">
+                                                          ToolTip="{Binding SelectedMode.Display}"
+                                                          PreviewMouseLeftButtonDown="PresetEditGuard_PreviewMouseLeftButtonDown">
                                                     <ComboBox.ItemTemplate>
                                                         <DataTemplate>
                                                             <TextBlock Text="{Binding Display}" Foreground="{StaticResource TextBrush}"/>
@@ -328,7 +318,8 @@
                                             <DataTemplate>
                                                 <ComboBox ItemsSource="{Binding Sources}"
                                                           SelectedItem="{Binding SelectedSource, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                          ToolTip="{Binding SelectedSource.DisplayName}">
+                                                          ToolTip="{Binding SelectedSource.DisplayName}"
+                                                          PreviewMouseLeftButtonDown="PresetEditGuard_PreviewMouseLeftButtonDown">
                                                     <ComboBox.ItemTemplate>
                                                         <DataTemplate>
                                                             <TextBlock Text="{Binding DisplayName}" Foreground="{StaticResource TextBrush}"
@@ -350,7 +341,8 @@
                                                     </Grid.ColumnDefinitions>
                                                     <Slider Minimum="0" Maximum="100" SmallChange="1" LargeChange="5"
                                                             Value="{Binding FixedPercent, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                            IsEnabled="{Binding IsFixedMode}" VerticalAlignment="Center"/>
+                                                            IsEnabled="{Binding IsFixedMode}" VerticalAlignment="Center"
+                                                            PreviewMouseLeftButtonDown="PresetEditGuard_PreviewMouseLeftButtonDown"/>
                                                     <TextBlock Grid.Column="1" Text="{Binding FixedPercentText}"
                                                                VerticalAlignment="Center" TextAlignment="Right"
                                                                FontFamily="{StaticResource MonoFont}" FontSize="11.5"

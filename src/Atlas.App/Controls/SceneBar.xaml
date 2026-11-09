@@ -6,6 +6,9 @@
              FontSize="12"
              TextOptions.TextFormattingMode="Display"
              UseLayoutRounding="True">
+    <!-- v2：单一下拉（内置场景 + 我的配置 + 未归档占位），选择即切换；
+         不再有「应用」按钮、三个场景按钮、只读徽标和右侧「当前方案」状态 chip。
+         当前来源由下拉选中项表达，未保存修改只用一个很小的琥珀「已修改」徽标提示。 -->
     <Border Style="{StaticResource CardBorder}" Padding="14,0" Height="58">
         <Grid VerticalAlignment="Center">
             <Grid.ColumnDefinitions>
@@ -13,48 +16,88 @@
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <!-- ===== 内置场景模板（只读） ===== -->
-            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="场景模板" FontSize="11.5" Foreground="{StaticResource MutedBrush}"
-                           VerticalAlignment="Center"
-                           ToolTip="内置场景（只读）：一键把所有未锁定通道切换为温度曲线并套用同名曲线模板。场景值不能修改；调整后请另存为「我的配置」。"/>
-                <Border Style="{StaticResource ChipBorder}" Padding="6,2" Margin="7,0,10,0"
-                        Background="{StaticResource AccentSoftBrush}" BorderBrush="#22385C"
-                        ToolTip="内置模板与场景由程序内置，不能修改、改名或删除。">
-                    <TextBlock Text="只读" FontSize="10" FontWeight="SemiBold"
-                               Foreground="#79B6FF" VerticalAlignment="Center"/>
-                </Border>
-                <StackPanel x:Name="SceneButtonsPanel" Orientation="Horizontal" VerticalAlignment="Center"/>
-            </StackPanel>
+            <!-- ===== 标题 ===== -->
+            <TextBlock Grid.Column="0" Text="场景 / 配置" FontSize="11.5"
+                       Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"
+                       ToolTip="内置场景（只读）：一键把所有未锁定通道切换为温度曲线并套用同名曲线模板。&#10;「我的配置」：你自己命名并保存的整套设置，可更新、重命名、删除。"/>
 
-            <!-- ===== 分隔线 ===== -->
-            <Border Grid.Column="1" Width="1" Height="28" Margin="11,0,15,0"
-                    Background="{StaticResource BorderBrush2}" VerticalAlignment="Center"/>
+            <!-- ===== 单一下拉：选中即切换 ===== -->
+            <ComboBox x:Name="ChoiceCombo" Grid.Column="1" Width="320" Margin="10,0,0,0"
+                      VerticalAlignment="Center" HorizontalContentAlignment="Stretch"
+                      ToolTip="内置场景只读；选择即切换。要修改请先复制为「我的配置」。"
+                      SelectionChanged="ChoiceCombo_SelectionChanged">
+                <ComboBox.ItemContainerStyle>
+                    <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                    </Style>
+                </ComboBox.ItemContainerStyle>
+                <ComboBox.ItemTemplate>
+                    <DataTemplate>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
 
-            <!-- ===== 我的配置（可改名 / 更新 / 删除） ===== -->
-            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="我的配置" FontSize="11.5" Foreground="{StaticResource MutedBrush}"
-                           VerticalAlignment="Center"
-                           ToolTip="「我的配置」是你保存的整套设置（可改名、更新、删除），和只读的内置场景不是一回事。"/>
+                            <!-- 类型徽标：内置 · 只读 / 我的 / 未归档 -->
+                            <Border x:Name="KindBadge" Grid.Column="0" Padding="6,1" Margin="0,0,8,0"
+                                    CornerRadius="5" BorderThickness="1" VerticalAlignment="Center"
+                                    Background="#111A27" BorderBrush="{StaticResource BorderSoftBrush}">
+                                <TextBlock x:Name="KindText" Text="{Binding TypeLabel}" FontSize="9.5"
+                                           FontWeight="SemiBold" Foreground="{StaticResource MutedBrush}"
+                                           VerticalAlignment="Center"/>
+                            </Border>
 
-                <ComboBox x:Name="ProfileCombo" Width="140" Margin="8,0,6,0" VerticalAlignment="Center"
-                          ToolTip="选择要应用 / 更新 / 重命名 / 删除的「我的配置」"
-                          SelectionChanged="ProfileCombo_SelectionChanged">
-                    <ComboBox.ItemTemplate>
-                        <DataTemplate>
-                            <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"
+                            <TextBlock Grid.Column="1" Text="{Binding Name}" TextTrimming="CharacterEllipsis"
+                                       MaxWidth="170" VerticalAlignment="Center"
                                        ToolTip="{Binding DisplayName}"/>
-                        </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                </ComboBox>
 
-                <Button x:Name="ApplyProfileButton" Content="应用" Style="{StaticResource ToolbarButton}"
-                        Padding="10,5" Margin="0,0,4,0" Click="ApplyProfileButton_Click"
-                        ToolTipService.ShowOnDisabled="True"
-                        ToolTip="把所选「我的配置」套用到所有未锁定通道，会覆盖当前方案。"/>
+                            <!-- 我的配置附带更新时间 -->
+                            <TextBlock Grid.Column="2" Text="{Binding DetailText}" Margin="8,0,0,0"
+                                       FontSize="10" Foreground="{StaticResource DimBrush}"
+                                       VerticalAlignment="Center"
+                                       Visibility="{Binding DetailText, Converter={StaticResource NotEmptyToVisibility}}"/>
+                        </Grid>
+                        <DataTemplate.Triggers>
+                            <!-- 内置场景：青色描边只读感 -->
+                            <DataTrigger Binding="{Binding Kind}" Value="BuiltInScene">
+                                <Setter TargetName="KindBadge" Property="Background" Value="#12252B"/>
+                                <Setter TargetName="KindBadge" Property="BorderBrush" Value="#2A5058"/>
+                                <Setter TargetName="KindText" Property="Foreground" Value="{StaticResource CyanBrush}"/>
+                            </DataTrigger>
+                            <!-- 我的配置：Accent -->
+                            <DataTrigger Binding="{Binding Kind}" Value="Profile">
+                                <Setter TargetName="KindBadge" Property="Background" Value="{StaticResource AccentSoftBrush}"/>
+                                <Setter TargetName="KindBadge" Property="BorderBrush" Value="#22385C"/>
+                                <Setter TargetName="KindText" Property="Foreground" Value="#79B6FF"/>
+                            </DataTrigger>
+                            <!-- 未归档占位：Muted -->
+                            <DataTrigger Binding="{Binding Kind}" Value="Draft">
+                                <Setter TargetName="KindBadge" Property="Background" Value="#111A27"/>
+                                <Setter TargetName="KindBadge" Property="BorderBrush" Value="{StaticResource BorderSoftBrush}"/>
+                                <Setter TargetName="KindText" Property="Foreground" Value="{StaticResource MutedBrush}"/>
+                            </DataTrigger>
+                        </DataTemplate.Triggers>
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
 
+            <!-- ===== 已修改：很小的琥珀徽标，仅 IsDirty 时可见 ===== -->
+            <Border x:Name="DirtyBadge" Grid.Column="2" Style="{StaticResource ChipBorder}"
+                    Margin="9,0,0,0" Padding="7,2" Visibility="Collapsed"
+                    Background="{StaticResource AmberSoftBrush}" BorderBrush="#4A3D22"
+                    ToolTip="当前方案有未保存的修改。">
+                <TextBlock Text="已修改" FontSize="10" FontWeight="SemiBold"
+                           Foreground="{StaticResource AmberBrush}" VerticalAlignment="Center"/>
+            </Border>
+
+            <!-- ===== 右侧配置动作（不再有「应用」按钮） ===== -->
+            <StackPanel Grid.Column="4" Orientation="Horizontal"
+                        HorizontalAlignment="Right" VerticalAlignment="Center">
                 <Button x:Name="SaveProfileButton" Style="{StaticResource PrimaryButton}"
                         Padding="11,5" Margin="0,0,4,0" Click="SaveProfileButton_Click"
                         ToolTipService.ShowOnDisabled="True"
@@ -71,42 +114,15 @@
                         Padding="10,5" Margin="0,0,4,0" Click="UpdateProfileButton_Click"
                         ToolTipService.ShowOnDisabled="True"
                         ToolTip="用当前设置覆盖所选「我的配置」（内置场景不可覆盖）。"/>
-
                 <Button x:Name="RenameProfileButton" Content="重命名" Style="{StaticResource ToolbarButton}"
                         Padding="10,5" Margin="0,0,4,0" Click="RenameProfileButton_Click"
                         ToolTipService.ShowOnDisabled="True"
                         ToolTip="给所选「我的配置」改名（只改名字，不改保存的曲线内容）。"/>
-
                 <Button x:Name="DeleteProfileButton" Content="删除" Style="{StaticResource ToolbarButton}"
                         Padding="10,5" Click="DeleteProfileButton_Click"
                         ToolTipService.ShowOnDisabled="True"
                         ToolTip="删除所选「我的配置」（只删除这个保存的配置，当前正在生效的方案设置不会改变）。"/>
             </StackPanel>
-
-            <!-- ===== 当前方案状态 ===== -->
-            <Border x:Name="StatusChip" Grid.Column="3" Style="{StaticResource ChipBorder}"
-                    Margin="12,0,0,0" Padding="10,4"
-                    ToolTip="当前方案 = 正在编辑并实时生效的设置。套用场景/配置后若再改动扇通道，会标记为「已修改」，需要另存为配置才能保留。">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-
-                    <TextBlock Grid.Column="0" Text="当前方案" FontSize="10.5"
-                               Foreground="{StaticResource DimBrush}" VerticalAlignment="Center"
-                               Margin="0,0,8,0"/>
-
-                    <Ellipse x:Name="StatusDot" Grid.Column="1" Width="6" Height="6"
-                             Fill="{StaticResource GreenBrush}" VerticalAlignment="Center"
-                             Margin="0,0,7,0"/>
-
-                    <TextBlock x:Name="StatusTextBlock" Grid.Column="2" Text="自定义方案（未归档）"
-                               FontSize="11.5" Foreground="{StaticResource TextBrush}"
-                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                </Grid>
-            </Border>
         </Grid>
     </Border>
 </UserControl>
