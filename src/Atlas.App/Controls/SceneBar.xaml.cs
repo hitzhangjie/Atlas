@@ -79,8 +79,12 @@ public partial class SceneBar : UserControl
     /// <summary>用户在下拉列表里选择了某一项（已过滤程序化选择），参数是 <see cref="SceneBarChoiceItem.Id"/>。</summary>
     public event EventHandler<string>? ChoiceSelected;
 
+    /// <summary>把当前修改保存到选中的「我的配置」（写回，不新建）。</summary>
     public event EventHandler? SaveProfileRequested;
-    public event EventHandler? UpdateProfileRequested;
+
+    /// <summary>把当前设置另存为一个新的「我的配置」。</summary>
+    public event EventHandler? SaveAsProfileRequested;
+
     public event EventHandler? RenameProfileRequested;
     public event EventHandler? DeleteProfileRequested;
 
@@ -250,10 +254,10 @@ public partial class SceneBar : UserControl
     private void ApplyEnabledState()
     {
         ChoiceCombo.IsEnabled = _interactable;
-        SaveProfileButton.IsEnabled = _interactable;
+        SaveAsProfileButton.IsEnabled = _interactable;
 
         var isProfile = SelectedKind == SceneBarChoiceKind.Profile;
-        UpdateProfileButton.IsEnabled = _interactable && isProfile;
+        SaveProfileButton.IsEnabled = _interactable && isProfile;
         RenameProfileButton.IsEnabled = _interactable && isProfile;
         DeleteProfileButton.IsEnabled = _interactable && isProfile;
     }
@@ -276,14 +280,14 @@ public partial class SceneBar : UserControl
     private void SaveProfileButton_Click(object sender, RoutedEventArgs e)
     {
         if (_suppressEvents) return;
+        if (SelectedKind != SceneBarChoiceKind.Profile) return;
         SaveProfileRequested?.Invoke(this, EventArgs.Empty);
     }
 
-    private void UpdateProfileButton_Click(object sender, RoutedEventArgs e)
+    private void SaveAsProfileButton_Click(object sender, RoutedEventArgs e)
     {
         if (_suppressEvents) return;
-        if (SelectedKind != SceneBarChoiceKind.Profile) return;
-        UpdateProfileRequested?.Invoke(this, EventArgs.Empty);
+        SaveAsProfileRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private void RenameProfileButton_Click(object sender, RoutedEventArgs e)

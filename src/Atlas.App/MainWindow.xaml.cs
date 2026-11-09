@@ -47,6 +47,10 @@ public partial class MainWindow : Window
     // Atlas 自身在应用场景/配置、恢复 BIOS 默认时也会改通道设置，必须绕过只读闸门
     private bool _suppressPresetEditGuard;
 
+    // 底部状态栏：操作反馈优先显示几秒，空闲时只显示稳定的接管状态
+    private DateTime _statusHoldUntil;
+    private bool _updatingDefaultStatus;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -81,9 +85,19 @@ public partial class MainWindow : Window
         // SceneBar 只负责展示，所有业务动作都回到这里处理
         SceneBarControl.ChoiceSelected += OnSceneBarChoiceSelected;
         SceneBarControl.SaveProfileRequested += OnSaveProfileRequested;
-        SceneBarControl.UpdateProfileRequested += OnUpdateProfileRequested;
+        SceneBarControl.SaveAsProfileRequested += OnSaveAsProfileRequested;
         SceneBarControl.RenameProfileRequested += OnRenameProfileRequested;
         SceneBarControl.DeleteProfileRequested += OnDeleteProfileRequested;
+
+        // 任何地方写的操作反馈都在状态栏停留几秒，之后回到稳定的接管状态
+        // （TextBlock 没有 TextChanged 事件，用依赖属性描述符监听 Text 变化）
+        DependencyPropertyDescriptor
+            .FromProperty(TextBlock.TextProperty, typeof(TextBlock))
+            .AddValueChanged(StatusText, (_, _) =>
+            {
+                if (!_updatingDefaultStatus)
+                    _statusHoldUntil = DateTime.UtcNow.AddSeconds(5);
+            });
 
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
         {
@@ -247,9 +261,22 @@ public partial class MainWindow : Window
 
             var controlling = _engine.ActiveChannels > 0;
             StatusDot.Fill = controlling ? GreenBrush : MutedBrush;
-            StatusText.Text = !controlling
-                ? $"{_engine.LastStatus}（所有通道由 BIOS 控制）"
-                : $"{_engine.LastStatus} · 正在控制 {_engine.ActiveChannels} 个通道";
+
+            // 空闲时不显示“最后写了哪个通道 → 多少%”这类秒级噪音，只保留稳定摘要
+            if (DateTime.UtcNow >= _statusHoldUntil)
+            {
+                _updatingDefaultStatus = true;
+                try
+                {
+                    StatusText.Text = controlling
+                        ? $"正在控制 {_engine.ActiveChannels} 个通道"
+                        : "所有通道由 BIOS 控制";
+                }
+                finally
+                {
+                    _updatingDefaultStatus = false;
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -977,7 +1004,7 @@ public partial class MainWindow : Window
         return false;
     }
 
-    private void OnSaveProfileRequested(object? sender, EventArgs e)
+    private void OnSaveAsProfileRequested(object? sender, EventArgs e)
     {
         if (!_initialized) return;
 
@@ -1012,7 +1039,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnUpdateProfileRequested(object? sender, EventArgs e)
+    private void OnSaveProfileRequested(object? sender, EventArgs e)
     {
         if (!_initialized) return;
 
