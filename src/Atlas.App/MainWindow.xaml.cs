@@ -9,6 +9,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 
@@ -34,8 +35,17 @@ public partial class MainWindow : Window
     private bool _hideZeroRpm;
     private bool _initialized;
     private bool _closing;
-    private string? _selectedProfileId;
     private string _lastSceneBarSignature = "\0";
+
+    /// <summary>场景/配置切换确认框打开期间暂停每秒的 SceneBar 刷新，避免把用户刚选的新项回退掉。</summary>
+    private bool _sceneSwitchPromptOpen;
+
+    // 「内置场景只读」编辑拦截：防止滑块拖动/键盘连续修改时反复弹框
+    private bool _presetEditPromptOpen;
+    private DateTime _presetEditPromptSuppressUntil;
+
+    // Atlas 自身在应用场景/配置、恢复 BIOS 默认时也会改通道设置，必须绕过只读闸门
+    private bool _suppressPresetEditGuard;
 
     public MainWindow()
     {
@@ -69,9 +79,7 @@ public partial class MainWindow : Window
         Loaded += async (_, _) => await InitializeAsync();
 
         // SceneBar 只负责展示，所有业务动作都回到这里处理
-        SceneBarControl.SceneApplyRequested += OnSceneApplyRequested;
-        SceneBarControl.ProfileApplyRequested += OnProfileApplyRequested;
-        SceneBarControl.ProfileSelectionChanged += OnProfileSelectionChanged;
+        SceneBarControl.ChoiceSelected += OnSceneBarChoiceSelected;
         SceneBarControl.SaveProfileRequested += OnSaveProfileRequested;
         SceneBarControl.UpdateProfileRequested += OnUpdateProfileRequested;
         SceneBarControl.RenameProfileRequested += OnRenameProfileRequested;
@@ -169,7 +177,6 @@ public partial class MainWindow : Window
         HideZeroButton.IsEnabled = enabled;
         AutoStartButton.IsEnabled = enabled;
         CopyCurveButton.IsEnabled = enabled;
-        SaveButton.IsEnabled = enabled;
         RestoreButton.IsEnabled = enabled;
         SceneBarControl.Interactable = enabled;
     }
@@ -186,7 +193,11 @@ public partial class MainWindow : Window
             var cfg = _config.GetOrCreate(fan);
             if (string.IsNullOrWhiteSpace(cfg.SourceId))
                 cfg.SourceId = preferred?.Id ?? "";
-            _rows.Add(new FanRow(fan, cfg, sources));
+            var row = new FanRow(fan, cfg, sources);
+            // 兜底拦截：键盘 ↑↓ / PageUp / 滚轮 等绕过鼠标 Preview 的修改路径也会走 setter。
+            // 锁定通道同样拦截：内置场景生效期间任何热设置都不应被改动，否则会出现「预设 + 已修改」的矛盾状态。
+            row.EditGuard = PresetEditAllowed;
+            _rows.Add(row);
         }
 
         ChannelCountText.Text = $"{_rows.Count} 个通道";
@@ -506,6 +517,9 @@ public partial class MainWindow : Window
         if (!_initialized) return;
         if (sender is not FrameworkElement { DataContext: FanRow row }) return;
 
+        // 当前方案来自内置场景时，内置场景只读：先引导复制为可编辑的「我的配置」
+        if (!EnsurePresetEditable()) return;
+
         try { FanGrid.CommitEdit(DataGridEditingUnit.Row, true); } catch { }
 
         try
@@ -526,14 +540,18 @@ public partial class MainWindow : Window
     {
         if (!_initialized) return;
 
-        try { FanGrid.CommitEdit(DataGridEditingUnit.Row, true); } catch { }
-
         if (FanGrid.SelectedItem is not FanRow source)
         {
             MessageBox.Show("请先在表格里选中作为模板的通道行，再点「复制曲线…」。",
                 "Atlas", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
+
+        // 当前方案来自内置场景时，内置场景只读：先引导复制为可编辑的「我的配置」。
+        // 即使源通道被锁定，复制曲线也会改目标通道，所以同样要拦截。
+        if (!EnsurePresetEditable()) return;
+
+        try { FanGrid.CommitEdit(DataGridEditingUnit.Row, true); } catch { }
 
         try
         {
@@ -569,95 +587,126 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// 把当前配置来源整理成 SceneBar 需要的一次性视图状态。
+    /// 下拉列表 = 内置场景（只读）+ 我的配置；当前来源为空时再追加「未归档」占位项。
     /// SceneBar 内部会按签名去重，MainWindow 这里也记一份签名，避免每秒重复构造。
     /// </summary>
     private void RefreshSceneBar()
     {
+        // 切换确认框打开时不要刷新：否则每秒一次的轮询会把用户刚选中的条目改回旧项
+        if (_sceneSwitchPromptOpen) return;
+
         var activeScene = _config.FindActiveScene();
         var activeProfile = _config.FindActiveProfile();
         var dirty = _config.IsCurrentStateModified();
 
-        var selectedProfileId = ResolveSelectedProfileId(activeProfile);
+        var choices = new List<SceneBarChoiceItem>(ScenePresets.All.Count + _config.Profiles.Count + 1);
 
-        var statusText = activeProfile != null
-            ? $"我的配置 · {activeProfile.Name}"
-            : activeScene != null
-                ? $"内置场景 · {activeScene.Name}"
-                : "自定义方案（未归档）";
-        if (dirty) statusText += " · 已修改";
-
-        var statusHint = dirty
-            ? "已修改，尚未保存为配置"
-            : activeScene != null
-                ? "内置场景只读；改动后需另存为配置"
-                : activeProfile != null
-                    ? "已保存为「我的配置」"
-                    : "尚未归档为配置";
-
-        var scenes = ScenePresets.All.Select(scene => new SceneBarSceneItem
+        foreach (var scene in ScenePresets.All)
         {
-            Id = scene.Id,
-            Name = scene.Name,
-            Description = scene.Description,
-            IsActive = string.Equals(_config.ActiveSceneId, scene.Id, StringComparison.OrdinalIgnoreCase),
-        }).ToList();
+            choices.Add(new SceneBarChoiceItem
+            {
+                Id = scene.Id,
+                Kind = SceneBarChoiceKind.BuiltInScene,
+                Name = scene.Name,
+                TypeLabel = "内置 · 只读",
+                DisplayName = $"内置场景 · {scene.Name}（只读，选择即切换）",
+                IsReadOnly = true,
+            });
+        }
 
-        var profiles = _config.Profiles.Select(profile => new SceneBarProfileItem
+        foreach (var profile in _config.Profiles)
         {
-            Id = profile.Id,
-            Name = profile.Name,
-            DisplayName = $"{profile.Name} · {profile.UpdatedText}",
-        }).ToList();
+            choices.Add(new SceneBarChoiceItem
+            {
+                Id = profile.Id,
+                Kind = SceneBarChoiceKind.Profile,
+                Name = profile.Name,
+                TypeLabel = "我的",
+                DisplayName = $"我的配置 · {profile.Name} · 更新于 {profile.UpdatedText}",
+                DetailText = profile.UpdatedText,
+                IsReadOnly = false,
+            });
+        }
+
+        string selectedChoiceId;
+        if (activeScene != null)
+        {
+            selectedChoiceId = activeScene.Id;
+        }
+        else if (activeProfile != null)
+        {
+            selectedChoiceId = activeProfile.Id;
+        }
+        else
+        {
+            // 未归档：只作为「当前方案」的展示占位，不参与主动切换
+            selectedChoiceId = SceneBar.DraftChoiceId;
+            choices.Add(new SceneBarChoiceItem
+            {
+                Id = SceneBar.DraftChoiceId,
+                Kind = SceneBarChoiceKind.Draft,
+                Name = "当前自定义方案",
+                TypeLabel = "未归档",
+                DisplayName = "当前自定义方案（尚未保存为「我的配置」）",
+                IsReadOnly = false,
+            });
+        }
 
         var state = new SceneBarViewState
         {
-            Scenes = scenes,
-            Profiles = profiles,
-            SelectedProfileId = selectedProfileId,
-            StatusText = statusText,
-            StatusHint = statusHint,
+            Choices = choices,
+            SelectedChoiceId = selectedChoiceId,
             IsDirty = dirty,
             Interactable = _initialized,
         };
 
         var signature = BuildSceneBarSignature(state);
-        if (string.Equals(signature, _lastSceneBarSignature, StringComparison.Ordinal)) return;
+        if (string.Equals(signature, _lastSceneBarSignature, StringComparison.Ordinal) &&
+            string.Equals(SceneBarControl.SelectedChoiceId, selectedChoiceId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
         _lastSceneBarSignature = signature;
         SceneBarControl.Render(state);
     }
 
-    /// <summary>下拉框选中项：优先用户当前选择，其次当前生效配置，最后第一个配置。</summary>
-    private string? ResolveSelectedProfileId(SavedProfile? activeProfile)
+    /// <summary>当前方案来源对应的下拉选项 Id：内置场景 &gt; 我的配置 &gt; 未归档占位。</summary>
+    private string CurrentChoiceId()
     {
-        var selected = _config.FindProfile(_selectedProfileId);
-        if (selected is null) selected = activeProfile;
-        if (selected is null && _config.Profiles.Count > 0) selected = _config.Profiles[0];
+        var activeScene = _config.FindActiveScene();
+        if (activeScene != null) return activeScene.Id;
 
-        _selectedProfileId = selected?.Id;
-        return _selectedProfileId;
+        var activeProfile = _config.FindActiveProfile();
+        if (activeProfile != null) return activeProfile.Id;
+
+        return SceneBar.DraftChoiceId;
     }
 
     private static string BuildSceneBarSignature(SceneBarViewState state)
     {
         var builder = new StringBuilder(256);
-        builder.Append(state.StatusText).Append('\u0001')
-            .Append(state.StatusHint).Append('\u0001')
-            .Append(state.IsDirty).Append('\u0001')
+        builder.Append(state.IsDirty).Append('\u0001')
             .Append(state.Interactable).Append('\u0001')
-            .Append(state.SelectedProfileId ?? "").Append('\u0001');
+            .Append(state.SelectedChoiceId ?? "").Append('\u0001');
 
-        foreach (var scene in state.Scenes)
-            builder.Append(scene.Id).Append('\u0002').Append(scene.Name).Append('\u0002')
-                .Append(scene.IsActive).Append('\u0003');
-
-        builder.Append('\u0001');
-        foreach (var profile in state.Profiles)
-            builder.Append(profile.Id).Append('\u0002').Append(profile.DisplayName).Append('\u0003');
+        foreach (var choice in state.Choices)
+        {
+            builder.Append(choice.Id).Append('\u0002')
+                .Append((int)choice.Kind).Append('\u0002')
+                .Append(choice.Name).Append('\u0002')
+                .Append(choice.TypeLabel).Append('\u0002')
+                .Append(choice.DisplayName).Append('\u0002')
+                .Append(choice.DetailText).Append('\u0002')
+                .Append(choice.IsReadOnly).Append('\u0003');
+        }
 
         return builder.ToString();
     }
 
-    private SavedProfile? SelectedProfile => _config.FindProfile(_selectedProfileId);
+    /// <summary>当前下拉选中的「我的配置」；选中内置场景/未归档时返回 null。</summary>
+    private SavedProfile? SelectedChoiceProfile =>
+        _config.FindProfile(SceneBarControl.SelectedChoiceId);
 
     /// <summary>应用场景/配置前先提交表格里正在编辑的单元格，避免用户输入被丢弃。</summary>
     private void CommitPendingEdits()
@@ -681,100 +730,251 @@ public partial class MainWindow : Window
         preferred ??= _rows.FirstOrDefault()?.Sources.FirstOrDefault();
 
         var repaired = 0;
-        foreach (var row in _rows)
+        _suppressPresetEditGuard = true;
+        try
         {
-            // 锁定通道不参与任何写入，也不应被自动修复逻辑改动
-            if (row.Protected) continue;
-            if (row.SelectedSource != null || preferred is null) continue;
-            row.SelectedSource = preferred;
-            repaired++;
+            foreach (var row in _rows)
+            {
+                // 锁定通道不参与任何写入，也不应被自动修复逻辑改动
+                if (row.Protected) continue;
+                if (row.SelectedSource != null || preferred is null) continue;
+                row.SelectedSource = preferred;
+                repaired++;
+            }
+        }
+        finally
+        {
+            _suppressPresetEditGuard = false;
         }
 
         return repaired;
     }
 
-    private void OnSceneApplyRequested(object? sender, string sceneId)
+    /// <summary>
+    /// 用户在下拉里选择了一项 → 立即切换（不再有独立的「应用」按钮）。
+    /// 未保存修改时先确认；用户取消则把下拉回退到当前项（SetSelectedChoice 不发事件）。
+    /// </summary>
+    private void OnSceneBarChoiceSelected(object? sender, string choiceId)
     {
-        if (!_initialized) return;
-        var scene = ScenePresets.Find(sceneId);
-        if (scene is null) return;
+        var currentChoiceId = CurrentChoiceId();
+
+        if (!_initialized)
+        {
+            SceneBarControl.SetSelectedChoice(currentChoiceId);
+            return;
+        }
+
+        if (string.IsNullOrEmpty(choiceId) ||
+            string.Equals(choiceId, currentChoiceId, StringComparison.Ordinal))
+        {
+            SceneBarControl.SetSelectedChoice(currentChoiceId);
+            return;
+        }
 
         CommitPendingEdits();
 
+        // 确认框 / 命名框打开期间暂停每秒刷新，避免用户刚选中的项被轮询回退
+        _sceneSwitchPromptOpen = true;
+        try
+        {
+            if (ScenePresets.Find(choiceId) is { } scene)
+            {
+                ApplySceneChoice(scene, currentChoiceId);
+            }
+            else if (_config.FindProfile(choiceId) is { } profile)
+            {
+                ApplyProfileChoice(profile, currentChoiceId);
+            }
+            else
+            {
+                // 未知条目（例如配置刚好被删除）：回退下拉，不做变更
+                StatusText.Text = "所选方案已不存在，已恢复到当前方案";
+                SceneBarControl.SetSelectedChoice(currentChoiceId);
+            }
+        }
+        finally
+        {
+            _sceneSwitchPromptOpen = false;
+        }
+
+        // 统一刷新一次：成功时显示新来源，取消/失败时把下拉回退到当前来源
+        RefreshSceneBar();
+    }
+
+    /// <summary>选中内置场景 → 立即套用；失败/取消时回退下拉选中项。</summary>
+    private void ApplySceneChoice(ScenePreset scene, string currentChoiceId)
+    {
         if (_config.IsCurrentStateModified())
         {
             var answer = MessageBox.Show(
-                $"当前方案有尚未保存为「我的配置」的修改。套用内置场景「{scene.Name}」会覆盖这些修改（已保存的「我的配置」不受影响）。继续吗？",
+                "当前方案有未保存的修改，切换会丢弃（已保存的「我的配置」不受影响）。继续吗？",
                 "Atlas", MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (answer != MessageBoxResult.Yes) return;
+            if (answer != MessageBoxResult.Yes)
+            {
+                SceneBarControl.SetSelectedChoice(currentChoiceId);
+                return;
+            }
         }
 
         try
         {
             var result = FanProfileService.ApplyScene(_config, scene);
+            if (result.AppliedChannels == 0)
+            {
+                StatusText.Text = result.SkippedProtected > 0
+                    ? $"未应用「{scene.Name}」：{result.SkippedProtected} 个通道已锁定，没有可接管的通道"
+                    : $"未应用「{scene.Name}」：当前没有可接管的通道";
+                SceneBarControl.SetSelectedChoice(currentChoiceId);
+                return;
+            }
+
             foreach (var row in _rows) row.ReloadFromConfig();
             var repaired = RepairMissingSources();
             // 温度源自动修复会改 SourceId，基线必须以修复后的设置为准，否则刚应用完就显示「已修改」
-            if (result.AppliedChannels > 0) _config.StateFingerprint = _config.CurrentFingerprint();
+            _config.StateFingerprint = _config.CurrentFingerprint();
 
             _config.Save();
             StatusText.Text = $"{result.Summary}（内置场景「{scene.Name}」）" +
                               (repaired > 0 ? $" · 已修复 {repaired} 个失效温度源" : "");
-            RefreshSceneBar();
         }
         catch (Exception ex)
         {
             LogCrash(ex);
             MessageBox.Show($"套用内置场景失败：{ex.Message}", "Atlas",
                 MessageBoxButton.OK, MessageBoxImage.Error);
+            SceneBarControl.SetSelectedChoice(currentChoiceId);
         }
     }
 
-    private void OnProfileApplyRequested(object? sender, string profileId)
+    /// <summary>选中「我的配置」→ 立即套用；失败/取消时回退下拉选中项。</summary>
+    private void ApplyProfileChoice(SavedProfile profile, string currentChoiceId)
     {
-        if (!_initialized) return;
-        var profile = _config.FindProfile(profileId);
-        if (profile is null)
-        {
-            StatusText.Text = "所选「我的配置」已不存在，请刷新后重试";
-            return;
-        }
-
-        CommitPendingEdits();
-
         if (_config.IsCurrentStateModified())
         {
             var answer = MessageBox.Show(
-                $"当前方案有尚未保存为「我的配置」的修改。套用「我的配置」中的「{profile.Name}」会覆盖这些修改（已保存的「我的配置」不受影响）。继续吗？",
+                "当前方案有未保存的修改，切换会丢弃（已保存的「我的配置」不受影响）。继续吗？",
                 "Atlas", MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (answer != MessageBoxResult.Yes) return;
+            if (answer != MessageBoxResult.Yes)
+            {
+                SceneBarControl.SetSelectedChoice(currentChoiceId);
+                return;
+            }
         }
 
         try
         {
             var result = FanProfileService.ApplyProfile(_config, profile);
+            if (result.AppliedChannels == 0)
+            {
+                StatusText.Text = result.SkippedProtected > 0
+                    ? $"未应用「{profile.Name}」：{result.SkippedProtected} 个通道已锁定，没有可接管的通道"
+                    : $"未应用「{profile.Name}」：配置里没有可用的通道";
+                SceneBarControl.SetSelectedChoice(currentChoiceId);
+                return;
+            }
+
             foreach (var row in _rows) row.ReloadFromConfig();
             var repaired = RepairMissingSources();
             // 同场景：温度源修复后刷新基线，避免刚应用完就显示「已修改」
-            if (result.AppliedChannels > 0) _config.StateFingerprint = _config.CurrentFingerprint();
+            _config.StateFingerprint = _config.CurrentFingerprint();
 
             _config.Save();
             StatusText.Text = result.Summary +
                               (repaired > 0 ? $" · 已修复 {repaired} 个失效温度源" : "");
-            RefreshSceneBar();
         }
         catch (Exception ex)
         {
             LogCrash(ex);
             MessageBox.Show($"套用配置失败：{ex.Message}", "Atlas",
                 MessageBoxButton.OK, MessageBoxImage.Error);
+            SceneBarControl.SetSelectedChoice(currentChoiceId);
         }
     }
 
-    private void OnProfileSelectionChanged(object? sender, string? profileId)
+    /// <summary>
+    /// 内置场景是只读的：用户尝试编辑（曲线/模式/温度源/固定 PWM）时先拦截，
+    /// 引导「复制为我的配置」，复制成功也返回 false，让用户重新发起这次编辑（操作本身不生效）。
+    /// </summary>
+    private bool EnsurePresetEditable()
     {
-        _selectedProfileId = string.IsNullOrEmpty(profileId) ? null : profileId;
-        RefreshSceneBar();
+        var scene = _config.FindActiveScene();
+        if (scene is null) return true;
+
+        var answer = MessageBox.Show(
+            $"内置场景「{scene.Name}」是只读的，不能直接修改。是否复制为「我的配置」后继续编辑？",
+            "Atlas", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes) return false;
+
+        try
+        {
+            CommitPendingEdits();
+
+            var dialog = new ProfileNameWindow(
+                "复制为我的配置",
+                $"把场景「{scene.Name}」的当前设置复制为一个可编辑的「我的配置」",
+                $"{scene.Name} · 我的",
+                name => FanProfileService.ValidateProfileName(_config, name))
+            {
+                Owner = this,
+            };
+
+            if (dialog.ShowDialog() != true) return false;
+
+            var profile = FanProfileService.CaptureProfile(_config, dialog.ResultName);
+            _config.Profiles.Add(profile);
+            _config.MarkApplied(null, profile.Id);
+            _config.Save();
+
+            StatusText.Text = $"已复制为「我的配置 · {profile.Name}」，现在可以修改了";
+            RefreshSceneBar();
+        }
+        catch (Exception ex)
+        {
+            LogCrash(ex);
+            MessageBox.Show($"复制为「我的配置」失败：{ex.Message}", "Atlas",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+
+        // 本次编辑操作不生效：当前选中的工具/控件状态已因刷新而重置，请用户重新操作
+        return false;
+    }
+
+    /// <summary>
+    /// 表格里的模式/温度源/固定 PWM 属于「修改当前方案」：当前方案来自内置场景（只读）时拦截本次交互。
+    /// 备注名与「锁定」是通道身份/安全属性，不拦截。
+    /// </summary>
+    private void PresetEditGuard_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!_initialized) return;
+        if (sender is not FrameworkElement { DataContext: FanRow row }) return;
+        if (_config.ActiveSceneId is null) return;
+
+        if (PresetEditAllowed()) return;
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// 统一的只读拦截入口：内置场景生效时提示复制，并做节流（滑块拖动/键盘连按不重复弹框）。
+    /// 返回 false 表示本次修改被拒绝；返回 true 表示可以继续编辑。
+    /// </summary>
+    private bool PresetEditAllowed()
+    {
+        if (_suppressPresetEditGuard) return true;
+        if (_config.ActiveSceneId is null) return true;
+        if (_presetEditPromptOpen || DateTime.UtcNow < _presetEditPromptSuppressUntil) return false;
+
+        _presetEditPromptOpen = true;
+        try
+        {
+            EnsurePresetEditable();
+        }
+        finally
+        {
+            _presetEditPromptOpen = false;
+            _presetEditPromptSuppressUntil = DateTime.UtcNow.AddSeconds(2);
+        }
+
+        return false;
     }
 
     private void OnSaveProfileRequested(object? sender, EventArgs e)
@@ -801,7 +1001,6 @@ public partial class MainWindow : Window
             _config.MarkApplied(null, profile.Id);
             _config.Save();
 
-            _selectedProfileId = profile.Id;
             StatusText.Text = $"已保存配置「{profile.Name}」";
             RefreshSceneBar();
         }
@@ -817,10 +1016,10 @@ public partial class MainWindow : Window
     {
         if (!_initialized) return;
 
-        var profile = SelectedProfile;
+        var profile = SelectedChoiceProfile;
         if (profile is null)
         {
-            MessageBox.Show("请先在「我的配置」下拉框里选择一个配置。", "Atlas",
+            MessageBox.Show("请先在「场景 / 配置」下拉框里选择一个「我的配置」。", "Atlas",
                 MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -858,10 +1057,10 @@ public partial class MainWindow : Window
     {
         if (!_initialized) return;
 
-        var profile = SelectedProfile;
+        var profile = SelectedChoiceProfile;
         if (profile is null)
         {
-            MessageBox.Show("请先在「我的配置」下拉框里选择一个配置。", "Atlas",
+            MessageBox.Show("请先在「场景 / 配置」下拉框里选择一个「我的配置」。", "Atlas",
                 MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -898,10 +1097,10 @@ public partial class MainWindow : Window
     {
         if (!_initialized) return;
 
-        var profile = SelectedProfile;
+        var profile = SelectedChoiceProfile;
         if (profile is null)
         {
-            MessageBox.Show("请先在「我的配置」下拉框里选择一个配置。", "Atlas",
+            MessageBox.Show("请先在「场景 / 配置」下拉框里选择一个「我的配置」。", "Atlas",
                 MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -918,9 +1117,6 @@ public partial class MainWindow : Window
             var name = profile.Name;
             if (!FanProfileService.DeleteProfile(_config, profile.Id)) return;
 
-            if (string.Equals(_selectedProfileId, profile.Id, StringComparison.Ordinal))
-                _selectedProfileId = null;
-
             _config.Save();
             StatusText.Text = $"已删除配置「{name}」";
             RefreshSceneBar();
@@ -933,20 +1129,21 @@ public partial class MainWindow : Window
         }
     }
 
-    private void SaveButton_Click(object sender, RoutedEventArgs e)
-    {
-        CommitPendingEdits();
-        _config.Save();
-        StatusText.Text = $"配置已保存：{AtlasConfig.ConfigPath}";
-    }
-
     private void RestoreButton_Click(object sender, RoutedEventArgs e)
     {
         if (!_initialized) return;
 
         CommitPendingEdits();
 
-        foreach (var row in _rows) row.SelectedMode = row.Modes[0]; // BIOS 默认
+        _suppressPresetEditGuard = true;
+        try
+        {
+            foreach (var row in _rows) row.SelectedMode = row.Modes[0]; // BIOS 默认
+        }
+        finally
+        {
+            _suppressPresetEditGuard = false;
+        }
         _engine?.RestoreAll();
 
         // 当前方案回到「未归档」：不再声称来自某个内置场景或我的配置。

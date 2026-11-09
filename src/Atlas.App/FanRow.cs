@@ -21,6 +21,15 @@ public sealed class FanRow : INotifyPropertyChanged
     private FanModeOption _selectedMode;
     private TemperatureSource? _selectedSource;
 
+    /// <summary>
+    /// 热设置编辑闸门：返回 false 表示本次修改被拒绝（例如内置场景只读）。
+    /// 供 MainWindow 挂接「请先复制为我的配置」的拦截逻辑，也覆盖键盘/滚轮等
+    /// 绕过鼠标 Preview 拦截的修改路径。备注名、锁定不经过这里。
+    /// </summary>
+    public Func<bool>? EditGuard { get; set; }
+
+    private bool CanEdit() => EditGuard is null || EditGuard();
+
     public FanRow(FanChannel fan, FanCurveConfig config, IReadOnlyList<TemperatureSource> sources)
     {
         _fan = fan;
@@ -72,6 +81,12 @@ public sealed class FanRow : INotifyPropertyChanged
         set
         {
             if (value == null || _selectedMode == value) return;
+            if (!CanEdit())
+            {
+                // 拒绝本次修改：通知绑定把下拉/单元格恢复为旧值
+                OnPropertyChanged(nameof(SelectedMode));
+                return;
+            }
             _selectedMode = value;
             _config.Mode = value.Value;
             OnPropertyChanged();
@@ -87,6 +102,12 @@ public sealed class FanRow : INotifyPropertyChanged
         get => _selectedSource;
         set
         {
+            if (Equals(_selectedSource, value)) return;
+            if (!CanEdit())
+            {
+                OnPropertyChanged(nameof(SelectedSource));
+                return;
+            }
             _selectedSource = value;
             _config.SourceId = value?.Id ?? "";
             OnPropertyChanged();
@@ -99,6 +120,12 @@ public sealed class FanRow : INotifyPropertyChanged
         set
         {
             if (Math.Abs(_config.FixedPercent - value) < 0.01f) return;
+            if (!CanEdit())
+            {
+                OnPropertyChanged(nameof(FixedPercent));
+                OnPropertyChanged(nameof(FixedPercentText));
+                return;
+            }
             _config.FixedPercent = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(FixedPercentText));
@@ -148,6 +175,7 @@ public sealed class FanRow : INotifyPropertyChanged
 
     public void SetCurve(IEnumerable<CurvePoint> points)
     {
+        if (!CanEdit()) return;
         _config.Curve = points.Select(p => new CurvePoint { Temp = p.Temp, Percent = p.Percent }).ToList();
         OnPropertyChanged(nameof(CurveText));
         OnPropertyChanged(nameof(CurvePoints));
