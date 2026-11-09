@@ -32,28 +32,12 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <!-- ===== 页面头部 ===== -->
-                <Grid Grid.Row="0" Margin="2,0,2,16">
-                    <StackPanel>
-                        <TextBlock Style="{StaticResource PageTitle}" Text="风扇控制台"/>
-                        <TextBlock Style="{StaticResource PageSubtitle}" Margin="0,4,0,0"
-                                   Text="实时温度 · 曲线调速 · 传感器监控　（灯效交由 Armoury Crate 负责）"/>
-                    </StackPanel>
-                    <Border Style="{StaticResource ChipBorder}" HorizontalAlignment="Right" VerticalAlignment="Center">
-                        <StackPanel Orientation="Horizontal">
-                            <Ellipse Width="6" Height="6" Fill="{StaticResource GreenBrush}" VerticalAlignment="Center"/>
-                            <TextBlock Style="{StaticResource ChipText}" Text="本地运行 · 管理员权限" Margin="7,0,0,0"/>
-                        </StackPanel>
-                    </Border>
-                </Grid>
-
                 <!-- ===== 传感器卡片：主指标 = 普通用户关心的部件温度；工程师指标放副标题 ===== -->
-                <Grid Grid.Row="1">
+                <Grid Grid.Row="0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="*"/>
@@ -154,7 +138,7 @@
                 </Grid>
 
                 <!-- ===== 提示条 ===== -->
-                <Border Grid.Row="2" Background="{StaticResource AmberSoftBrush}"
+                <Border Grid.Row="1" Background="{StaticResource AmberSoftBrush}"
                         BorderBrush="#4A3D22" BorderThickness="1" CornerRadius="10"
                         Padding="12,9" Margin="0,14,0,0">
                     <DockPanel>
@@ -168,10 +152,10 @@
                 </Border>
 
                 <!-- ===== 场景模板 / 我的配置 / 当前方案 ===== -->
-                <controls:SceneBar x:Name="SceneBarControl" Grid.Row="3" Margin="0,12,0,0"/>
+                <controls:SceneBar x:Name="SceneBarControl" Grid.Row="2" Margin="0,12,0,0"/>
 
                 <!-- ===== 风扇通道表格 ===== -->
-                <Border Grid.Row="4" Style="{StaticResource CardBorder}" Padding="0" Margin="0,14,0,0">
+                <Border Grid.Row="3" Style="{StaticResource CardBorder}" Padding="0" Margin="0,14,0,0">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
@@ -263,9 +247,6 @@
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
-
-                                    <DataGridTextColumn Header="备注（括号内）" Width="132"
-                                                        Binding="{Binding CustomName, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"/>
 
                                     <DataGridTemplateColumn Header="转速" Width="106" IsReadOnly="True">
                                         <DataGridTemplateColumn.CellTemplate>
@@ -404,16 +385,13 @@
                 </Border>
 
                 <!-- ===== 状态栏 ===== -->
-                <Grid Grid.Row="5" Margin="2,12,2,0">
+                <Grid Grid.Row="4" Margin="2,12,2,0">
                     <StackPanel Orientation="Horizontal">
                         <Ellipse x:Name="StatusDot" Width="7" Height="7" Fill="{StaticResource GreenBrush}"
                                  VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <TextBlock x:Name="StatusText" Text="就绪" Foreground="{StaticResource MutedBrush}"
                                    FontSize="11.5" VerticalAlignment="Center"/>
                     </StackPanel>
-                    <TextBlock HorizontalAlignment="Right" VerticalAlignment="Center"
-                               FontSize="11" Foreground="{StaticResource DimBrush}"
-                               Text="轮询 1.0 s · 看门狗 8 s · 配置自动保存"/>
                 </Grid>
             </Grid>
         </Grid>

@@ -39,11 +39,10 @@ public sealed class FanRow : INotifyPropertyChanged
         _selectedSource = sources.FirstOrDefault(s => s.Id == config.SourceId);
     }
 
-    public string Name => string.IsNullOrWhiteSpace(_config.CustomName)
-        ? _fan.DisplayName
-        : $"{_fan.DisplayName} ({_config.CustomName})";
+    /// <summary>表格里显示的通道名；备注名已从 UI 移除，仅保留硬件通道名。</summary>
+    public string Name => _fan.DisplayName;
 
-    /// <summary>括号里的备注名；编号（Fan #1 等）始终保留。</summary>
+    /// <summary>历史备注名（v0.2 配置兼容）；UI 不再展示/编辑，但保留字段避免丢旧配置。</summary>
     public string CustomName
     {
         get => _config.CustomName;
@@ -53,7 +52,6 @@ public sealed class FanRow : INotifyPropertyChanged
             if (_config.CustomName == trimmed) return;
             _config.CustomName = trimmed;
             OnPropertyChanged();
-            OnPropertyChanged(nameof(Name));
         }
     }
 

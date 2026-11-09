@@ -20,9 +20,9 @@
             </Grid.ColumnDefinitions>
 
             <!-- ===== 标题 ===== -->
-            <TextBlock Grid.Column="0" Text="场景 / 配置" FontSize="11.5"
+            <TextBlock Grid.Column="0" Text="切换配置" FontSize="11.5"
                        Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"
-                       ToolTip="内置场景（只读）：一键把所有未锁定通道切换为温度曲线并套用同名曲线模板。&#10;「我的配置」：你自己命名并保存的整套设置，可更新、重命名、删除。"/>
+                       ToolTip="内置场景（只读）：把所有未锁定通道切换为温度曲线并套用同名曲线模板。&#10;「我的配置」：你自己命名并保存的整套设置，可保存、另存为、重命名、删除。"/>
 
             <!-- ===== 单一下拉：选中即切换 ===== -->
             <ComboBox x:Name="ChoiceCombo" Grid.Column="1" Width="320" Margin="10,0,0,0"
@@ -101,19 +101,19 @@
                 <Button x:Name="SaveProfileButton" Style="{StaticResource PrimaryButton}"
                         Padding="11,5" Margin="0,0,4,0" Click="SaveProfileButton_Click"
                         ToolTipService.ShowOnDisabled="True"
-                        ToolTip="把当前所有通道的设置另存为一个新的「我的配置」，内置场景不受影响。">
+                        ToolTip="把当前修改保存到所选「我的配置」（内置场景不可保存）。">
                     <StackPanel Orientation="Horizontal">
                         <Path Data="{StaticResource IconSave}" Style="{StaticResource IconPath}"
                               Stroke="{StaticResource AccentTextBrush}" Width="12" Height="12"
                               Margin="0,0,5,0" VerticalAlignment="Center"/>
-                        <TextBlock Text="另存为…" VerticalAlignment="Center"/>
+                        <TextBlock Text="保存" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
 
-                <Button x:Name="UpdateProfileButton" Content="保存" Style="{StaticResource ToolbarButton}"
-                        Padding="10,5" Margin="0,0,4,0" Click="UpdateProfileButton_Click"
+                <Button x:Name="SaveAsProfileButton" Content="另存为…" Style="{StaticResource ToolbarButton}"
+                        Padding="10,5" Margin="0,0,4,0" Click="SaveAsProfileButton_Click"
                         ToolTipService.ShowOnDisabled="True"
-                        ToolTip="把当前修改保存到所选「我的配置」（内置场景不可保存）。"/>
+                        ToolTip="把当前所有通道的设置另存为一个新的「我的配置」，内置场景不受影响。"/>
                 <Button x:Name="RenameProfileButton" Content="重命名" Style="{StaticResource ToolbarButton}"
                         Padding="10,5" Margin="0,0,4,0" Click="RenameProfileButton_Click"
                         ToolTipService.ShowOnDisabled="True"
