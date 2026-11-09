@@ -986,8 +986,8 @@ public partial class MainWindow : Window
         try
         {
             var dialog = new ProfileNameWindow(
-                "保存配置",
-                "把当前所有通道设置保存为「我的配置」",
+                "另存为配置",
+                "把当前所有通道设置另存为一个新的「我的配置」",
                 "我的配置 " + DateTime.Now.ToString("MM-dd HH:mm"),
                 name => FanProfileService.ValidateProfileName(_config, name))
             {
@@ -1001,13 +1001,13 @@ public partial class MainWindow : Window
             _config.MarkApplied(null, profile.Id);
             _config.Save();
 
-            StatusText.Text = $"已保存配置「{profile.Name}」";
+            StatusText.Text = $"已另存为「{profile.Name}」";
             RefreshSceneBar();
         }
         catch (Exception ex)
         {
             LogCrash(ex);
-            MessageBox.Show($"保存配置失败：{ex.Message}", "Atlas",
+            MessageBox.Show($"另存为配置失败：{ex.Message}", "Atlas",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
@@ -1026,15 +1026,15 @@ public partial class MainWindow : Window
 
         CommitPendingEdits();
 
-        // 换硬件/少接风扇时，更新配置会把配置里那些当前不存在的通道永久丢掉，先提醒
+        // 换硬件/少接风扇时，保存会把配置里那些当前不存在的通道永久丢掉，先提醒
         var currentIds = new HashSet<string>(_config.Fans.Select(f => f.FanId), StringComparer.Ordinal);
         var missing = profile.Fans.Count(e => !currentIds.Contains(e.FanId));
         var missingNote = missing > 0
-            ? $"\n\n注意：该配置包含 {missing} 个当前不可用的通道，更新后它们会从配置中移除（设置无法恢复）。"
+            ? $"\n\n注意：该配置包含 {missing} 个当前不可用的通道，保存后它们会从配置中移除（设置无法恢复）。"
             : "";
 
         var answer = MessageBox.Show(
-            $"用当前设置覆盖配置「{profile.Name}」？（保存的配置内容会更新，名称不变）{missingNote}",
+            $"把当前修改保存到配置「{profile.Name}」？（配置内容会更新，名称不变）{missingNote}",
             "Atlas", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (answer != MessageBoxResult.Yes) return;
 
@@ -1042,13 +1042,13 @@ public partial class MainWindow : Window
         {
             FanProfileService.UpdateProfile(_config, profile);
             _config.Save();
-            StatusText.Text = $"已更新配置「{profile.Name}」";
+            StatusText.Text = $"已保存配置「{profile.Name}」";
             RefreshSceneBar();
         }
         catch (Exception ex)
         {
             LogCrash(ex);
-            MessageBox.Show($"更新配置失败：{ex.Message}", "Atlas",
+            MessageBox.Show($"保存配置失败：{ex.Message}", "Atlas",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }

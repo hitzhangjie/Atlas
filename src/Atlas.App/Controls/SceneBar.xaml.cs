@@ -242,8 +242,8 @@ public partial class SceneBar : UserControl
             SceneBarChoiceKind.BuiltInScene =>
                 "内置场景只读：当前改动需要先复制为「我的配置」才能保存。",
             SceneBarChoiceKind.Profile =>
-                "当前「我的配置」有未保存的修改，点「更新」保存。",
-            _ => "当前方案有未保存的修改，点「保存当前…」另存为「我的配置」。",
+                "当前「我的配置」有未保存的修改，点「保存」保存到该配置。",
+            _ => "当前方案有未保存的修改，点「另存为…」保存为「我的配置」。",
         };
     }
 
