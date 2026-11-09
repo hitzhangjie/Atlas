@@ -77,6 +77,8 @@ public sealed class FanRow : INotifyPropertyChanged
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsFixedMode));
             OnPropertyChanged(nameof(IsCurveMode));
+            OnPropertyChanged(nameof(CurveOriginText));
+            OnPropertyChanged(nameof(IsCurveFromTemplate));
         }
     }
 
@@ -121,6 +123,26 @@ public sealed class FanRow : INotifyPropertyChanged
     public string CurveText => string.Join(" · ",
         _config.Curve.OrderBy(p => p.Temp).Select(p => $"{p.Temp:0}°→{p.Percent:0}%"));
 
+    /// <summary>
+    /// 曲线来源说明：与某个内置模板完全一致时显示「模板 · 静音」等，
+    /// 否则显示「自定义曲线」；非曲线模式不显示（空串）。
+    /// </summary>
+    public string CurveOriginText
+    {
+        get
+        {
+            if (_config.Mode != FanMode.Curve) return "";
+            var templateId = CurveTemplates.Match(_config.Curve);
+            return templateId is null
+                ? "自定义曲线"
+                : "模板 · " + CurveTemplates.Get(templateId).Name;
+        }
+    }
+
+    /// <summary>曲线列第二行小字的颜色：模板 = 青色，自定义 = 琥珀色。</summary>
+    public bool IsCurveFromTemplate =>
+        _config.Mode == FanMode.Curve && CurveTemplates.Match(_config.Curve) is not null;
+
     public List<CurvePoint> GetCurve() =>
         _config.Curve.Select(p => new CurvePoint { Temp = p.Temp, Percent = p.Percent }).ToList();
 
@@ -129,6 +151,30 @@ public sealed class FanRow : INotifyPropertyChanged
         _config.Curve = points.Select(p => new CurvePoint { Temp = p.Temp, Percent = p.Percent }).ToList();
         OnPropertyChanged(nameof(CurveText));
         OnPropertyChanged(nameof(CurvePoints));
+        OnPropertyChanged(nameof(CurveOriginText));
+        OnPropertyChanged(nameof(IsCurveFromTemplate));
+    }
+
+    /// <summary>
+    /// 应用内置场景 / 「我的配置」后，_config 已被 FanProfileService 直接改写；
+    /// 这里把行内缓存重新对齐，并通知所有派生属性，避免界面显示旧值。
+    /// </summary>
+    public void ReloadFromConfig()
+    {
+        _selectedMode = ModeOptionsList.FirstOrDefault(o => o.Value == _config.Mode) ?? ModeOptionsList[0];
+        _selectedSource = Sources.FirstOrDefault(s => s.Id == _config.SourceId);
+
+        OnPropertyChanged(nameof(SelectedMode));
+        OnPropertyChanged(nameof(SelectedSource));
+        OnPropertyChanged(nameof(FixedPercent));
+        OnPropertyChanged(nameof(FixedPercentText));
+        OnPropertyChanged(nameof(CurveText));
+        OnPropertyChanged(nameof(CurvePoints));
+        OnPropertyChanged(nameof(CurveOriginText));
+        OnPropertyChanged(nameof(IsCurveFromTemplate));
+        OnPropertyChanged(nameof(IsFixedMode));
+        OnPropertyChanged(nameof(IsCurveMode));
+        OnPropertyChanged(nameof(PwmValue));
     }
 
     public void Refresh()

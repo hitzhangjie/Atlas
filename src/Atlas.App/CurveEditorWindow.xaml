@@ -55,17 +55,30 @@
                     <local:CurveEditor x:Name="Editor" MinHeight="300" ClipToBounds="True"/>
                 </Border>
 
-                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="2,14,2,0">
-                    <TextBlock Text="预设" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"
-                               FontSize="11.5" Margin="0,0,10,0"/>
-                    <Button Content="静音" Style="{StaticResource SmallGhostButton}" Padding="16,6" Margin="0,0,6,0"
-                            Click="PresetQuiet_Click"/>
-                    <Button Content="均衡" Style="{StaticResource SmallGhostButton}" Padding="16,6" Margin="0,0,6,0"
-                            Click="PresetBalanced_Click"/>
-                    <Button Content="性能" Style="{StaticResource SmallGhostButton}" Padding="16,6" Margin="0,0,6,0"
-                            Click="PresetPerformance_Click"/>
-                    <Button Content="恢复默认" Style="{StaticResource SmallGhostButton}" Padding="16,6"
-                            Click="Reset_Click"/>
+                <StackPanel Grid.Row="2" Margin="2,14,2,0">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="模板（只读）" Foreground="{StaticResource MutedBrush}"
+                                   VerticalAlignment="Center" FontSize="11.5" Margin="0,0,8,0"
+                                   ToolTip="内置曲线模板由程序提供，不能修改、改名或删除。点击只会把该模板的曲线套用到当前通道。"/>
+                        <Border Style="{StaticResource ChipBorder}" Padding="6,2" Margin="0,0,12,0"
+                                Background="{StaticResource AccentSoftBrush}" BorderBrush="#22385C"
+                                ToolTip="内置模板只读：套用后继续拖动控制点，改的只是本通道的曲线，不会修改模板本身。">
+                            <TextBlock Text="只读" FontSize="10" FontWeight="SemiBold"
+                                       Foreground="#79B6FF" VerticalAlignment="Center"/>
+                        </Border>
+                        <Button Content="静音" Style="{StaticResource SmallGhostButton}" Padding="16,6" Margin="0,0,6,0"
+                                Click="TemplateQuiet_Click"
+                                ToolTip="把内置「静音」模板套用到当前曲线（只读模板，不会被修改）"/>
+                        <Button Content="均衡" Style="{StaticResource SmallGhostButton}" Padding="16,6" Margin="0,0,6,0"
+                                Click="TemplateBalanced_Click"
+                                ToolTip="把内置「均衡」模板套用到当前曲线（只读模板，不会被修改）"/>
+                        <Button Content="性能" Style="{StaticResource SmallGhostButton}" Padding="16,6"
+                                Click="TemplatePerformance_Click"
+                                ToolTip="把内置「性能」模板套用到当前曲线（只读模板，不会被修改）"/>
+                    </StackPanel>
+                    <TextBlock Margin="0,8,0,0" FontSize="11" Foreground="{StaticResource MutedBrush}"
+                               TextWrapping="Wrap"
+                               Text="模板只读：点击只套用到当前曲线；继续在画布上调整只会改变本通道设置，不会修改模板。"/>
                 </StackPanel>
 
                 <Border Grid.Row="3" Background="#0E1520" BorderBrush="{StaticResource BorderSoftBrush}"

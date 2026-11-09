@@ -1,3 +1,4 @@
+using Atlas.Cli;
 using Atlas.Core;
 using LibreHardwareMonitor.Hardware;
 using System.Text;
@@ -5,6 +6,10 @@ using System.Text;
 Console.OutputEncoding = Encoding.UTF8;
 
 var mode = args.Length > 0 ? args[0].ToLowerInvariant() : "list";
+
+// 纯逻辑自测：不打开硬件，普通权限即可运行
+if (mode is "preset-selftest" or "selftest")
+    return PresetSelfTest.Run();
 
 var hardware = new HardwareService();
 try
@@ -29,7 +34,7 @@ switch (mode)
         break;
 
     default:
-        Console.WriteLine("用法: Atlas.Cli [list|smoke] [秒数]");
+        Console.WriteLine("用法: Atlas.Cli [list|smoke|preset-selftest] [秒数]");
         break;
 }
 
