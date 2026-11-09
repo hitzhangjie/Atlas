@@ -110,7 +110,7 @@
                     </StackPanel>
                 </Button>
 
-                <Button x:Name="SaveAsProfileButton" Content="另存为…" Style="{StaticResource ToolbarButton}"
+                <Button x:Name="SaveAsProfileButton" Content="另存为" Style="{StaticResource ToolbarButton}"
                         Padding="10,5" Margin="0,0,4,0" Click="SaveAsProfileButton_Click"
                         ToolTipService.ShowOnDisabled="True"
                         ToolTip="把当前所有通道的设置另存为一个新的「我的配置」，内置场景不受影响。"/>
