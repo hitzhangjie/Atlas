@@ -1,9 +1,11 @@
+using Atlas.App.Controls;
 using Atlas.Core;
 using LibreHardwareMonitor.Hardware;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -32,6 +34,8 @@ public partial class MainWindow : Window
     private bool _hideZeroRpm;
     private bool _initialized;
     private bool _closing;
+    private string? _selectedProfileId;
+    private string _lastSceneBarSignature = "\0";
 
     public MainWindow()
     {
@@ -64,6 +68,15 @@ public partial class MainWindow : Window
         Closing += OnClosing;
         Loaded += async (_, _) => await InitializeAsync();
 
+        // SceneBar 只负责展示，所有业务动作都回到这里处理
+        SceneBarControl.SceneApplyRequested += OnSceneApplyRequested;
+        SceneBarControl.ProfileApplyRequested += OnProfileApplyRequested;
+        SceneBarControl.ProfileSelectionChanged += OnProfileSelectionChanged;
+        SceneBarControl.SaveProfileRequested += OnSaveProfileRequested;
+        SceneBarControl.UpdateProfileRequested += OnUpdateProfileRequested;
+        SceneBarControl.RenameProfileRequested += OnRenameProfileRequested;
+        SceneBarControl.DeleteProfileRequested += OnDeleteProfileRequested;
+
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
         {
             if (args.ExceptionObject is Exception ex) LogCrash(ex);
@@ -79,6 +92,7 @@ public partial class MainWindow : Window
 
         SetInteractionEnabled(false);
         StatusText.Text = "正在初始化硬件…";
+        RefreshSceneBar(); // 先以只读状态把内置场景/我的配置展示出来
         StartupMark("window constructed");
     }
 
@@ -102,6 +116,9 @@ public partial class MainWindow : Window
 
             var rowWatch = Stopwatch.StartNew();
             BuildRows();
+            // 基线必须在通道枚举 + 默认温度源补齐之后建立：全新安装/新增通道不算用户修改，
+            // 否则启动就显示「已修改」，还会在首次套用场景时弹无意义确认。
+            _config.EnsureStateBaseline();
             _fanView = CollectionViewSource.GetDefaultView(_rows);
             _viewGate = new ViewRefreshGate(_fanView, IsAnyDropDownOpen);
             FanGrid.ItemsSource = _fanView;
@@ -111,6 +128,7 @@ public partial class MainWindow : Window
             _timer.Start();
             _initialized = true;
             SetInteractionEnabled(true);
+            RefreshSceneBar();
             StartupMark($"init complete, process→ready = {(DateTime.Now - ProcessStartTime).TotalMilliseconds:0}ms");
 
             StatusText.Text = "就绪";
@@ -153,6 +171,7 @@ public partial class MainWindow : Window
         CopyCurveButton.IsEnabled = enabled;
         SaveButton.IsEnabled = enabled;
         RestoreButton.IsEnabled = enabled;
+        SceneBarControl.Interactable = enabled;
     }
 
     private void BuildRows()
@@ -189,6 +208,9 @@ public partial class MainWindow : Window
             }
 
             foreach (var row in _rows) row.Refresh();
+
+            // 当前方案状态（内置场景 / 我的配置 / 是否已修改）——SceneBar 自身会做变化检测
+            RefreshSceneBar();
 
             // 只在可见行集合真的变化时才重建视图；否则每秒 Refresh 会打断用户正在操作的下拉列表 / 滑块
             UpdateRowVisibility();
@@ -541,8 +563,379 @@ public partial class MainWindow : Window
         }
     }
 
+    // ==================================================================
+    //  内置场景 / 我的配置
+    // ==================================================================
+
+    /// <summary>
+    /// 把当前配置来源整理成 SceneBar 需要的一次性视图状态。
+    /// SceneBar 内部会按签名去重，MainWindow 这里也记一份签名，避免每秒重复构造。
+    /// </summary>
+    private void RefreshSceneBar()
+    {
+        var activeScene = _config.FindActiveScene();
+        var activeProfile = _config.FindActiveProfile();
+        var dirty = _config.IsCurrentStateModified();
+
+        var selectedProfileId = ResolveSelectedProfileId(activeProfile);
+
+        var statusText = activeProfile != null
+            ? $"我的配置 · {activeProfile.Name}"
+            : activeScene != null
+                ? $"内置场景 · {activeScene.Name}"
+                : "自定义方案（未归档）";
+        if (dirty) statusText += " · 已修改";
+
+        var statusHint = dirty
+            ? "已修改，尚未保存为配置"
+            : activeScene != null
+                ? "内置场景只读；改动后需另存为配置"
+                : activeProfile != null
+                    ? "已保存为「我的配置」"
+                    : "尚未归档为配置";
+
+        var scenes = ScenePresets.All.Select(scene => new SceneBarSceneItem
+        {
+            Id = scene.Id,
+            Name = scene.Name,
+            Description = scene.Description,
+            IsActive = string.Equals(_config.ActiveSceneId, scene.Id, StringComparison.OrdinalIgnoreCase),
+        }).ToList();
+
+        var profiles = _config.Profiles.Select(profile => new SceneBarProfileItem
+        {
+            Id = profile.Id,
+            Name = profile.Name,
+            DisplayName = $"{profile.Name} · {profile.UpdatedText}",
+        }).ToList();
+
+        var state = new SceneBarViewState
+        {
+            Scenes = scenes,
+            Profiles = profiles,
+            SelectedProfileId = selectedProfileId,
+            StatusText = statusText,
+            StatusHint = statusHint,
+            IsDirty = dirty,
+            Interactable = _initialized,
+        };
+
+        var signature = BuildSceneBarSignature(state);
+        if (string.Equals(signature, _lastSceneBarSignature, StringComparison.Ordinal)) return;
+        _lastSceneBarSignature = signature;
+        SceneBarControl.Render(state);
+    }
+
+    /// <summary>下拉框选中项：优先用户当前选择，其次当前生效配置，最后第一个配置。</summary>
+    private string? ResolveSelectedProfileId(SavedProfile? activeProfile)
+    {
+        var selected = _config.FindProfile(_selectedProfileId);
+        if (selected is null) selected = activeProfile;
+        if (selected is null && _config.Profiles.Count > 0) selected = _config.Profiles[0];
+
+        _selectedProfileId = selected?.Id;
+        return _selectedProfileId;
+    }
+
+    private static string BuildSceneBarSignature(SceneBarViewState state)
+    {
+        var builder = new StringBuilder(256);
+        builder.Append(state.StatusText).Append('\u0001')
+            .Append(state.StatusHint).Append('\u0001')
+            .Append(state.IsDirty).Append('\u0001')
+            .Append(state.Interactable).Append('\u0001')
+            .Append(state.SelectedProfileId ?? "").Append('\u0001');
+
+        foreach (var scene in state.Scenes)
+            builder.Append(scene.Id).Append('\u0002').Append(scene.Name).Append('\u0002')
+                .Append(scene.IsActive).Append('\u0003');
+
+        builder.Append('\u0001');
+        foreach (var profile in state.Profiles)
+            builder.Append(profile.Id).Append('\u0002').Append(profile.DisplayName).Append('\u0003');
+
+        return builder.ToString();
+    }
+
+    private SavedProfile? SelectedProfile => _config.FindProfile(_selectedProfileId);
+
+    /// <summary>应用场景/配置前先提交表格里正在编辑的单元格，避免用户输入被丢弃。</summary>
+    private void CommitPendingEdits()
+    {
+        try { FanGrid.CommitEdit(DataGridEditingUnit.Row, true); } catch { }
+    }
+
+    /// <summary>
+    /// 场景/配置可能带回本机不存在的温度源 Id（换硬件、传感器改名）。
+    /// 温度源失效 5 秒后引擎会全速兜底，所以这里把它修回默认 CPU 温度源，返回修复数量。
+    /// </summary>
+    private int RepairMissingSources()
+    {
+        TemperatureSource? preferred = null;
+        foreach (var row in _rows)
+        {
+            preferred = row.Sources.FirstOrDefault(s => s.DisplayName.Contains("CPU Package"))
+                        ?? row.Sources.FirstOrDefault(s => s.DisplayName.Contains("Core Max"));
+            if (preferred != null) break;
+        }
+        preferred ??= _rows.FirstOrDefault()?.Sources.FirstOrDefault();
+
+        var repaired = 0;
+        foreach (var row in _rows)
+        {
+            // 锁定通道不参与任何写入，也不应被自动修复逻辑改动
+            if (row.Protected) continue;
+            if (row.SelectedSource != null || preferred is null) continue;
+            row.SelectedSource = preferred;
+            repaired++;
+        }
+
+        return repaired;
+    }
+
+    private void OnSceneApplyRequested(object? sender, string sceneId)
+    {
+        if (!_initialized) return;
+        var scene = ScenePresets.Find(sceneId);
+        if (scene is null) return;
+
+        CommitPendingEdits();
+
+        if (_config.IsCurrentStateModified())
+        {
+            var answer = MessageBox.Show(
+                $"当前方案有尚未保存为「我的配置」的修改。套用内置场景「{scene.Name}」会覆盖这些修改（已保存的「我的配置」不受影响）。继续吗？",
+                "Atlas", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (answer != MessageBoxResult.Yes) return;
+        }
+
+        try
+        {
+            var result = FanProfileService.ApplyScene(_config, scene);
+            foreach (var row in _rows) row.ReloadFromConfig();
+            var repaired = RepairMissingSources();
+            // 温度源自动修复会改 SourceId，基线必须以修复后的设置为准，否则刚应用完就显示「已修改」
+            if (result.AppliedChannels > 0) _config.StateFingerprint = _config.CurrentFingerprint();
+
+            _config.Save();
+            StatusText.Text = $"{result.Summary}（内置场景「{scene.Name}」）" +
+                              (repaired > 0 ? $" · 已修复 {repaired} 个失效温度源" : "");
+            RefreshSceneBar();
+        }
+        catch (Exception ex)
+        {
+            LogCrash(ex);
+            MessageBox.Show($"套用内置场景失败：{ex.Message}", "Atlas",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void OnProfileApplyRequested(object? sender, string profileId)
+    {
+        if (!_initialized) return;
+        var profile = _config.FindProfile(profileId);
+        if (profile is null)
+        {
+            StatusText.Text = "所选「我的配置」已不存在，请刷新后重试";
+            return;
+        }
+
+        CommitPendingEdits();
+
+        if (_config.IsCurrentStateModified())
+        {
+            var answer = MessageBox.Show(
+                $"当前方案有尚未保存为「我的配置」的修改。套用「我的配置」中的「{profile.Name}」会覆盖这些修改（已保存的「我的配置」不受影响）。继续吗？",
+                "Atlas", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (answer != MessageBoxResult.Yes) return;
+        }
+
+        try
+        {
+            var result = FanProfileService.ApplyProfile(_config, profile);
+            foreach (var row in _rows) row.ReloadFromConfig();
+            var repaired = RepairMissingSources();
+            // 同场景：温度源修复后刷新基线，避免刚应用完就显示「已修改」
+            if (result.AppliedChannels > 0) _config.StateFingerprint = _config.CurrentFingerprint();
+
+            _config.Save();
+            StatusText.Text = result.Summary +
+                              (repaired > 0 ? $" · 已修复 {repaired} 个失效温度源" : "");
+            RefreshSceneBar();
+        }
+        catch (Exception ex)
+        {
+            LogCrash(ex);
+            MessageBox.Show($"套用配置失败：{ex.Message}", "Atlas",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void OnProfileSelectionChanged(object? sender, string? profileId)
+    {
+        _selectedProfileId = string.IsNullOrEmpty(profileId) ? null : profileId;
+        RefreshSceneBar();
+    }
+
+    private void OnSaveProfileRequested(object? sender, EventArgs e)
+    {
+        if (!_initialized) return;
+
+        CommitPendingEdits();
+
+        try
+        {
+            var dialog = new ProfileNameWindow(
+                "保存配置",
+                "把当前所有通道设置保存为「我的配置」",
+                "我的配置 " + DateTime.Now.ToString("MM-dd HH:mm"),
+                name => FanProfileService.ValidateProfileName(_config, name))
+            {
+                Owner = this,
+            };
+
+            if (dialog.ShowDialog() != true) return;
+
+            var profile = FanProfileService.CaptureProfile(_config, dialog.ResultName);
+            _config.Profiles.Add(profile);
+            _config.MarkApplied(null, profile.Id);
+            _config.Save();
+
+            _selectedProfileId = profile.Id;
+            StatusText.Text = $"已保存配置「{profile.Name}」";
+            RefreshSceneBar();
+        }
+        catch (Exception ex)
+        {
+            LogCrash(ex);
+            MessageBox.Show($"保存配置失败：{ex.Message}", "Atlas",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void OnUpdateProfileRequested(object? sender, EventArgs e)
+    {
+        if (!_initialized) return;
+
+        var profile = SelectedProfile;
+        if (profile is null)
+        {
+            MessageBox.Show("请先在「我的配置」下拉框里选择一个配置。", "Atlas",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        CommitPendingEdits();
+
+        // 换硬件/少接风扇时，更新配置会把配置里那些当前不存在的通道永久丢掉，先提醒
+        var currentIds = new HashSet<string>(_config.Fans.Select(f => f.FanId), StringComparer.Ordinal);
+        var missing = profile.Fans.Count(e => !currentIds.Contains(e.FanId));
+        var missingNote = missing > 0
+            ? $"\n\n注意：该配置包含 {missing} 个当前不可用的通道，更新后它们会从配置中移除（设置无法恢复）。"
+            : "";
+
+        var answer = MessageBox.Show(
+            $"用当前设置覆盖配置「{profile.Name}」？（保存的配置内容会更新，名称不变）{missingNote}",
+            "Atlas", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes) return;
+
+        try
+        {
+            FanProfileService.UpdateProfile(_config, profile);
+            _config.Save();
+            StatusText.Text = $"已更新配置「{profile.Name}」";
+            RefreshSceneBar();
+        }
+        catch (Exception ex)
+        {
+            LogCrash(ex);
+            MessageBox.Show($"更新配置失败：{ex.Message}", "Atlas",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void OnRenameProfileRequested(object? sender, EventArgs e)
+    {
+        if (!_initialized) return;
+
+        var profile = SelectedProfile;
+        if (profile is null)
+        {
+            MessageBox.Show("请先在「我的配置」下拉框里选择一个配置。", "Atlas",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        CommitPendingEdits();
+
+        try
+        {
+            var dialog = new ProfileNameWindow(
+                "重命名配置",
+                $"给配置「{profile.Name}」起一个新名字",
+                profile.Name,
+                name => FanProfileService.ValidateProfileName(_config, name, profile.Id))
+            {
+                Owner = this,
+            };
+
+            if (dialog.ShowDialog() != true) return;
+
+            profile.Name = dialog.ResultName;
+            _config.Save();
+            StatusText.Text = $"已重命名配置为「{profile.Name}」";
+            RefreshSceneBar();
+        }
+        catch (Exception ex)
+        {
+            LogCrash(ex);
+            MessageBox.Show($"重命名配置失败：{ex.Message}", "Atlas",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void OnDeleteProfileRequested(object? sender, EventArgs e)
+    {
+        if (!_initialized) return;
+
+        var profile = SelectedProfile;
+        if (profile is null)
+        {
+            MessageBox.Show("请先在「我的配置」下拉框里选择一个配置。", "Atlas",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        CommitPendingEdits();
+
+        var answer = MessageBox.Show(
+            $"删除配置「{profile.Name}」？当前方案设置不会改变。",
+            "Atlas", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes) return;
+
+        try
+        {
+            var name = profile.Name;
+            if (!FanProfileService.DeleteProfile(_config, profile.Id)) return;
+
+            if (string.Equals(_selectedProfileId, profile.Id, StringComparison.Ordinal))
+                _selectedProfileId = null;
+
+            _config.Save();
+            StatusText.Text = $"已删除配置「{name}」";
+            RefreshSceneBar();
+        }
+        catch (Exception ex)
+        {
+            LogCrash(ex);
+            MessageBox.Show($"删除配置失败：{ex.Message}", "Atlas",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private void SaveButton_Click(object sender, RoutedEventArgs e)
     {
+        CommitPendingEdits();
         _config.Save();
         StatusText.Text = $"配置已保存：{AtlasConfig.ConfigPath}";
     }
@@ -551,10 +944,21 @@ public partial class MainWindow : Window
     {
         if (!_initialized) return;
 
+        CommitPendingEdits();
+
         foreach (var row in _rows) row.SelectedMode = row.Modes[0]; // BIOS 默认
         _engine?.RestoreAll();
+
+        // 当前方案回到「未归档」：不再声称来自某个内置场景或我的配置。
+        // 设置本身没有变化，所以把当前热设置记为基线（干净未归档），
+        // 之后的手工修改才会重新显示「已修改」。
+        _config.ActiveSceneId = null;
+        _config.ActiveProfileId = null;
+        _config.StateFingerprint = _config.CurrentFingerprint();
         _config.Save();
+
         StatusText.Text = "已关闭所有控制并恢复 BIOS 默认";
+        RefreshSceneBar();
     }
 
     private void AutoStartButton_Click(object sender, RoutedEventArgs e)

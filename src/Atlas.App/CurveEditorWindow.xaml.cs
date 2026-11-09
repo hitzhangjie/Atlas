@@ -20,33 +20,25 @@ public partial class CurveEditorWindow : Window
 
     private void UpdateSummary()
     {
-        SummaryText.Text = "当前曲线：" + string.Join(" · ",
+        var pointsText = string.Join(" · ",
             Editor.Points.OrderBy(p => p.Temp).Select(p => $"{p.Temp:0}°→{p.Percent:0}%"));
+
+        var templateId = CurveTemplates.Match(Editor.Points);
+        var origin = templateId is null
+            ? "当前曲线：自定义（未套用模板）"
+            : $"当前曲线：与「{CurveTemplates.Get(templateId).Name}」模板一致";
+
+        SummaryText.Text = $"{origin} · {pointsText}";
     }
 
-    private void PresetQuiet_Click(object sender, RoutedEventArgs e) => Editor.SetPoints(new[]
-    {
-        new CurvePoint { Temp = 30, Percent = 20 },
-        new CurvePoint { Temp = 45, Percent = 25 },
-        new CurvePoint { Temp = 60, Percent = 30 },
-        new CurvePoint { Temp = 70, Percent = 40 },
-        new CurvePoint { Temp = 80, Percent = 55 },
-        new CurvePoint { Temp = 88, Percent = 75 },
-        new CurvePoint { Temp = 95, Percent = 100 },
-    });
+    private void TemplateQuiet_Click(object sender, RoutedEventArgs e) =>
+        Editor.SetPoints(CurveTemplates.CloneCurve(CurveTemplates.QuietId));
 
-    private void PresetBalanced_Click(object sender, RoutedEventArgs e) => Editor.ResetDefault();
+    private void TemplateBalanced_Click(object sender, RoutedEventArgs e) =>
+        Editor.SetPoints(CurveTemplates.CloneCurve(CurveTemplates.BalancedId));
 
-    private void PresetPerformance_Click(object sender, RoutedEventArgs e) => Editor.SetPoints(new[]
-    {
-        new CurvePoint { Temp = 30, Percent = 40 },
-        new CurvePoint { Temp = 45, Percent = 55 },
-        new CurvePoint { Temp = 60, Percent = 75 },
-        new CurvePoint { Temp = 70, Percent = 90 },
-        new CurvePoint { Temp = 80, Percent = 100 },
-    });
-
-    private void Reset_Click(object sender, RoutedEventArgs e) => Editor.ResetDefault();
+    private void TemplatePerformance_Click(object sender, RoutedEventArgs e) =>
+        Editor.SetPoints(CurveTemplates.CloneCurve(CurveTemplates.PerformanceId));
 
     private void Ok_Click(object sender, RoutedEventArgs e)
     {

@@ -2,7 +2,7 @@
 
 Windows PC 一体化硬件控制软件——**自用个人版：风扇控制 + 传感器监控**。灯效交给 Armoury Crate，Atlas 不碰灯。
 
-当前状态：**v0.2 可用**（三种模式：BIOS 默认 / 固定 PWM / 温度曲线；曲线编辑器；通道锁定；看门狗；开机自启）。
+当前状态：**v0.2 可用**（三种模式：BIOS 默认 / 固定 PWM / 温度曲线；曲线编辑器；通道锁定；看门狗；开机自启）。**v0.3 原型在分支 `fan-profiles`**：内置场景（静音 / 均衡 / 性能，只读一键应用）、单扇只读曲线模板、用户命名的「我的配置」，设计见[风扇预设 / 场景 / 配置设计](docs/fan-profiles-design.md)。
 
 ## 快速开始
 
@@ -84,6 +84,7 @@ research/         软硬件生态调研笔记
 ## 文档
 
 - [个人版开发计划与当前状态](docs/personal-build-plan.md)：本机硬件、Phase 0 实测结果、v0.2 功能、安全设计、后续版本
+- [风扇预设 / 场景 / 配置设计（v0.3 草案）](docs/fan-profiles-design.md)：内置场景、单扇模板、我的配置的分层设计，以及与现有模式的语义区分
 - [可行性评估报告](docs/feasibility-assessment.md)：分模块结论、竞品事实、推荐架构、工作量、风险
 - [生态调研笔记](research/rgb-landscape.md)：SignalRGB / Armoury Crate / OpenRGB 现状与开源属性
 - [底层访问调研笔记](research/windows-hardware-access.md)：驱动签名、WinRing0 封禁、PawnIO、厂商 SDK
