@@ -101,19 +101,19 @@
                 <Button x:Name="SaveProfileButton" Style="{StaticResource PrimaryButton}"
                         Padding="11,5" Margin="0,0,4,0" Click="SaveProfileButton_Click"
                         ToolTipService.ShowOnDisabled="True"
-                        ToolTip="把当前所有通道的设置保存为一个新的「我的配置」，内置场景不受影响。">
+                        ToolTip="把当前所有通道的设置另存为一个新的「我的配置」，内置场景不受影响。">
                     <StackPanel Orientation="Horizontal">
                         <Path Data="{StaticResource IconSave}" Style="{StaticResource IconPath}"
                               Stroke="{StaticResource AccentTextBrush}" Width="12" Height="12"
                               Margin="0,0,5,0" VerticalAlignment="Center"/>
-                        <TextBlock Text="保存当前…" VerticalAlignment="Center"/>
+                        <TextBlock Text="另存为…" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
 
-                <Button x:Name="UpdateProfileButton" Content="更新" Style="{StaticResource ToolbarButton}"
+                <Button x:Name="UpdateProfileButton" Content="保存" Style="{StaticResource ToolbarButton}"
                         Padding="10,5" Margin="0,0,4,0" Click="UpdateProfileButton_Click"
                         ToolTipService.ShowOnDisabled="True"
-                        ToolTip="用当前设置覆盖所选「我的配置」（内置场景不可覆盖）。"/>
+                        ToolTip="把当前修改保存到所选「我的配置」（内置场景不可保存）。"/>
                 <Button x:Name="RenameProfileButton" Content="重命名" Style="{StaticResource ToolbarButton}"
                         Padding="10,5" Margin="0,0,4,0" Click="RenameProfileButton_Click"
                         ToolTipService.ShowOnDisabled="True"
