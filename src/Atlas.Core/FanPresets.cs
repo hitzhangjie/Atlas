@@ -411,6 +411,38 @@ public static class FanProfileService
         return result;
     }
 
+    /// <summary>
+    /// 「全部交由 BIOS 控制」对当前方案状态的影响：所有通道模式改回 BIOS 默认。
+    /// 锁定通道同样改模式——锁定约束的是「永不写硬件」，不是「不能改配置」。
+    ///
+    /// 来源归属遵循「能编辑的永远是当前方案」：
+    ///  - 当前来源是「我的配置」：保留来源，不刷新基线，界面因此显示「已修改」，
+    ///    用户点「保存」即可写回该配置（不会新建配置，也不会未经确认覆盖已保存配置）；
+    ///  - 未归档草稿：保持未归档，并把当前设置记为基线。
+    ///
+    /// 注意：内置场景是只读的，UI 在调用本方法前已用 <c>EnsurePresetEditable()</c> 拦截
+    /// （与其他编辑动作一致：先引导复制为「我的配置」）。这里的场景兜底分支只是防御性逻辑，
+    /// 防止将来有别的调用方绕过 UI 闸门时留下「场景 + 已恢复」的矛盾状态。
+    /// </summary>
+    /// <returns>恢复前关联着的「我的配置」，没有则为 null（供调用方拼状态栏提示）。</returns>
+    public static SavedProfile? RestoreToBiosDefaults(AtlasConfig config)
+    {
+        var activeProfile = config.FindActiveProfile();
+
+        foreach (var fan in config.Fans)
+            fan.Mode = FanMode.Disabled;
+
+        // 兜底：内置场景只读、无法写回，绕过 UI 时退回未归档（正常 UI 路径不会走到这里）
+        config.ActiveSceneId = null;
+        if (activeProfile is null)
+        {
+            config.ActiveProfileId = null;
+            config.StateFingerprint = config.CurrentFingerprint();
+        }
+
+        return activeProfile;
+    }
+
     public static bool DeleteProfile(AtlasConfig config, string profileId)
     {
         var removed = config.Profiles.RemoveAll(p => string.Equals(p.Id, profileId, StringComparison.Ordinal)) > 0;

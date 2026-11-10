@@ -43,7 +43,7 @@ public partial class MainWindow : Window
     private bool _presetEditPromptOpen;
     private DateTime _presetEditPromptSuppressUntil;
 
-    // Atlas 自身在应用场景/配置、恢复 BIOS 默认时也会改通道设置，必须绕过只读闸门
+    // Atlas 自身在应用场景/配置、全部交由 BIOS 控制时也会改通道设置，必须绕过只读闸门
     private bool _suppressPresetEditGuard;
 
     // 底部状态栏：操作反馈优先显示几秒，空闲时只显示稳定的接管状态
@@ -108,7 +108,7 @@ public partial class MainWindow : Window
             LogCrash(args.Exception);
             args.Handled = true; // UI 线程异常不再直接终止进程
             SafeRestore();
-            StatusText.Text = $"已恢复 BIOS 默认（UI 异常：{args.Exception.Message}）";
+            StatusText.Text = $"已交由 BIOS 控制（UI 异常：{args.Exception.Message}）";
         };
 
         SetInteractionEnabled(false);
@@ -1218,26 +1218,24 @@ public partial class MainWindow : Window
 
         CommitPendingEdits();
 
-        _suppressPresetEditGuard = true;
-        try
-        {
-            foreach (var row in _rows) row.SelectedMode = row.Modes[0]; // BIOS 默认
-        }
-        finally
-        {
-            _suppressPresetEditGuard = false;
-        }
+        // 「全部交由 BIOS 控制」会把所有通道的模式批量改回 BIOS 默认，本质仍是对当前方案的编辑。
+        // 当前方案来自内置场景（只读）时，必须走和其他编辑动作相同的拦截：
+        // 先引导复制为「我的配置」，本次操作不生效（用户复制后可再点一次）。
+        if (!EnsurePresetEditable()) return;
+
+        // 全部交由 BIOS 控制 = 把所有通道模式批量改回「BIOS 默认」并交还控制权。
+        // 若当前来源是「我的配置」，保留来源并显示「已修改」：点「保存」写回该配置，
+        // 而不是把当前方案降级成「未归档」、逼用户另存成一个新配置。
+        var activeProfile = FanProfileService.RestoreToBiosDefaults(_config);
+        foreach (var row in _rows) row.ReloadFromConfig();
+
         _engine?.RestoreAll();
 
-        // 当前方案回到「未归档」：不再声称来自某个内置场景或我的配置。
-        // 设置本身没有变化，所以把当前热设置记为基线（干净未归档），
-        // 之后的手工修改才会重新显示「已修改」。
-        _config.ActiveSceneId = null;
-        _config.ActiveProfileId = null;
-        _config.StateFingerprint = _config.CurrentFingerprint();
         _config.Save();
 
-        StatusText.Text = "已关闭所有控制并恢复 BIOS 默认";
+        StatusText.Text = activeProfile is null
+            ? "已全部交由 BIOS 控制"
+            : $"已交由 BIOS 控制 · 点「保存」可写回配置「{activeProfile.Name}」";
         RefreshSceneBar();
     }
 

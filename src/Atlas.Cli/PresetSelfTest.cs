@@ -28,6 +28,7 @@ internal static class PresetSelfTest
         TestDeleteActiveProfile();
         TestUpdateProfile();
         TestMissingAndUntouchedChannels();
+        TestRestoreToBiosDefaults();
 
         Console.WriteLine();
         Console.WriteLine($"结果：{_passed} 通过，{_failed} 失败");
@@ -405,6 +406,52 @@ internal static class PresetSelfTest
         Check("配置里多出的通道计数", result.MissingChannels == 1);
         Check("当前机器多出的通道保持原样", result.UntouchedChannels == 1);
         Check("新通道设置未被改动", config.Fans[1].Mode == FanMode.Disabled);
+    }
+
+    private static void TestRestoreToBiosDefaults()
+    {
+        Section("全部交由 BIOS 控制");
+
+        var config = new AtlasConfig();
+        config.Fans.Add(new FanCurveConfig
+        {
+            FanId = "fan-1", FanName = "Fan #1", Mode = FanMode.Curve,
+            SourceId = "cpu", Curve = CurveTemplates.CloneCurve("quiet"),
+        });
+        config.Fans.Add(new FanCurveConfig
+        {
+            FanId = "pump", FanName = "Fan #7", Protected = true,
+            Mode = FanMode.Fixed, FixedPercent = 90,
+        });
+        var profile = FanProfileService.CaptureProfile(config, "夜间安静");
+        config.Profiles.Add(profile);
+        FanProfileService.ApplyProfile(config, profile);
+
+        var active = FanProfileService.RestoreToBiosDefaults(config);
+        Check("恢复后返回当前「我的配置」", active?.Id == profile.Id);
+        Check("恢复后所有通道 = BIOS 默认",
+            config.Fans.All(f => f.Mode == FanMode.Disabled));
+        Check("恢复后仍关联原配置（不新建、不降级为未归档）",
+            config.ActiveProfileId == profile.Id && config.ActiveSceneId is null);
+        Check("恢复后显示「已修改」", config.IsCurrentStateModified());
+        Check("恢复不直接改写配置快照", profile.Fans[0].Settings.Mode == FanMode.Curve);
+
+        // 用户点「保存」→ 写回同一份配置，不新建
+        FanProfileService.UpdateProfile(config, profile);
+        Check("保存后仍只有 1 份配置", config.Profiles.Count == 1);
+        Check("保存后快照 = BIOS 默认",
+            profile.Fans.All(e => e.Settings.Mode == FanMode.Disabled));
+        Check("保存后不再显示「已修改」", !config.IsCurrentStateModified());
+
+        // 内置场景只读：恢复后回到未归档，且不算用户修改
+        var sceneConfig = new AtlasConfig();
+        sceneConfig.Fans.Add(new FanCurveConfig { FanId = "fan-1", FanName = "Fan #1" });
+        FanProfileService.ApplyScene(sceneConfig, ScenePresets.Find(ScenePresets.QuietId)!);
+
+        var noProfile = FanProfileService.RestoreToBiosDefaults(sceneConfig);
+        Check("场景来源恢复后清空（只读场景无法写回）",
+            noProfile is null && sceneConfig.ActiveSceneId is null && sceneConfig.ActiveProfileId is null);
+        Check("场景恢复后不算「已修改」", !sceneConfig.IsCurrentStateModified());
     }
 
     private static void Section(string name) => Console.WriteLine($"\n[{name}]");

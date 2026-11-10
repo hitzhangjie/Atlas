@@ -139,7 +139,7 @@ public sealed class FanEngine : IDisposable
             _hardware.RestoreAll();
             _lastApplied.Clear();
             _sourceMissingSince.Clear();
-            LastStatus = "已恢复 BIOS 默认";
+            LastStatus = "已交由 BIOS 控制";
         }
     }
 
