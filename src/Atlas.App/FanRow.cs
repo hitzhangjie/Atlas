@@ -30,14 +30,28 @@ public sealed class FanRow : INotifyPropertyChanged
 
     private bool CanEdit() => EditGuard is null || EditGuard();
 
-    public FanRow(FanChannel fan, FanCurveConfig config, IReadOnlyList<TemperatureSource> sources)
+    public FanRow(FanChannel fan, FanCurveConfig config, IReadOnlyList<TemperatureSource> sources,
+        bool canSelectSource = true)
     {
         _fan = fan;
         _config = config;
         Sources = sources;
+        CanSelectSource = canSelectSource;
         _selectedMode = ModeOptionsList.FirstOrDefault(o => o.Value == config.Mode) ?? ModeOptionsList[0];
         _selectedSource = sources.FirstOrDefault(s => s.Id == config.SourceId);
     }
+
+    /// <summary>显卡风扇：温度源强制为 GPU Core，不允许用户误选 CPU 温度。</summary>
+    public bool IsGpu => _fan.IsGpu;
+
+    /// <summary>温度源是否允许用户选择（显卡通道固定用 GPU Core，因此为 false）。</summary>
+    public bool CanSelectSource { get; }
+
+    /// <summary>固定 PWM 列在非固定模式下置灰，体现“真正生效的是哪一列”。</summary>
+    public double FixedColumnOpacity => IsFixedMode ? 1.0 : 0.35;
+
+    /// <summary>曲线列在非曲线模式下置灰。</summary>
+    public double CurveColumnOpacity => IsCurveMode ? 1.0 : 0.35;
 
     /// <summary>表格里显示的通道名；备注名已从 UI 移除，仅保留硬件通道名。</summary>
     public string Name => _fan.DisplayName;
@@ -92,6 +106,8 @@ public sealed class FanRow : INotifyPropertyChanged
             OnPropertyChanged(nameof(IsCurveMode));
             OnPropertyChanged(nameof(CurveOriginText));
             OnPropertyChanged(nameof(IsCurveFromTemplate));
+            OnPropertyChanged(nameof(FixedColumnOpacity));
+            OnPropertyChanged(nameof(CurveColumnOpacity));
         }
     }
 
@@ -200,6 +216,8 @@ public sealed class FanRow : INotifyPropertyChanged
         OnPropertyChanged(nameof(IsCurveFromTemplate));
         OnPropertyChanged(nameof(IsFixedMode));
         OnPropertyChanged(nameof(IsCurveMode));
+        OnPropertyChanged(nameof(FixedColumnOpacity));
+        OnPropertyChanged(nameof(CurveColumnOpacity));
         OnPropertyChanged(nameof(PwmValue));
     }
 

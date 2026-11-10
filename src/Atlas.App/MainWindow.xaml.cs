@@ -136,10 +136,13 @@ public partial class MainWindow : Window
             });
 
             var rowWatch = Stopwatch.StartNew();
-            BuildRows();
+            var normalizedSources = BuildRows();
             // 基线必须在通道枚举 + 默认温度源补齐之后建立：全新安装/新增通道不算用户修改，
             // 否则启动就显示「已修改」，还会在首次套用场景时弹无意义确认。
             _config.EnsureStateBaseline();
+            // 升级后温度源收敛（如显卡强制 GPU Core、细节源回落 CPU Package）不是用户修改，
+            // 不能因为归一化而让状态显示「已修改」。
+            if (normalizedSources > 0) _config.StateFingerprint = _config.CurrentFingerprint();
             _fanView = CollectionViewSource.GetDefaultView(_rows);
             _viewGate = new ViewRefreshGate(_fanView, IsAnyDropDownOpen);
             FanGrid.ItemsSource = _fanView;
@@ -185,25 +188,84 @@ public partial class MainWindow : Window
     {
         FanGrid.IsEnabled = enabled;
         HideZeroButton.IsEnabled = enabled;
-        SettingsButton.IsEnabled = enabled;
         CopyCurveButton.IsEnabled = enabled;
         RestoreButton.IsEnabled = enabled;
         SceneBarControl.Interactable = enabled;
     }
 
-    private void BuildRows()
+    /// <summary>CPU 封装/核心温度（Intel CPU Package / Core Max；AMD Tctl / Tdie）。</summary>
+    private static bool IsCpuTemperature(TemperatureSource source)
+    {
+        var name = source.DisplayName;
+        return name.Contains("CPU Package", StringComparison.OrdinalIgnoreCase)
+               || name.Contains("Core Max", StringComparison.OrdinalIgnoreCase)
+               || name.Contains("Tctl", StringComparison.OrdinalIgnoreCase)
+               || name.Contains("Tdie", StringComparison.OrdinalIgnoreCase)
+               || name.Contains("CPU Core", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static TemperatureSource? FindCpuTemperature(IReadOnlyList<TemperatureSource> sources) =>
+        sources.FirstOrDefault(IsCpuTemperature)
+        ?? sources.FirstOrDefault(s => !s.DisplayName.Contains("GPU", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// 每个风扇可选的温度源：
+    /// - 显卡通道：强制使用该显卡自己的 GPU Core（不允许误选 CPU 温度）；
+    /// - 主板通道：只提供 CPU Package / GPU Core 两个实用选项，隐藏 P/E 核、热点、显存等细节传感器。
+    /// </summary>
+    private static List<TemperatureSource> BuildAllowedSources(
+        FanChannel fan, IReadOnlyList<TemperatureSource> all,
+        TemperatureSource? cpuPackage, TemperatureSource? gpuCore)
+    {
+        if (fan.IsGpu)
+        {
+            var perGpu = all
+                .Where(s => s.DisplayName.StartsWith(fan.HardwareName + " · ", StringComparison.Ordinal))
+                .ToList();
+
+            var core = perGpu.FirstOrDefault(s => s.DisplayName.Contains("GPU Core"));
+            if (core != null) return new List<TemperatureSource> { core };
+            if (perGpu.Count > 0) return new List<TemperatureSource> { perGpu[0] };
+            return gpuCore is null ? new List<TemperatureSource>() : new List<TemperatureSource> { gpuCore };
+        }
+
+        var list = new List<TemperatureSource>(2);
+        if (cpuPackage != null) list.Add(cpuPackage);
+        if (gpuCore != null && list.All(s => s.Id != gpuCore.Id)) list.Add(gpuCore);
+        return list;
+    }
+
+    /// <summary>建立通道行，返回因温度源收敛而改写的通道数（用于升级后避免误报「已修改」）。</summary>
+    private int BuildRows()
     {
         var sources = _hardware.GetTemperatureSources();
-        var preferred = sources.FirstOrDefault(s => s.DisplayName.Contains("CPU Package"))
-                        ?? sources.FirstOrDefault(s => s.DisplayName.Contains("Core Max"))
-                        ?? sources.FirstOrDefault();
+        var cpuPackage = FindCpuTemperature(sources);
+        var gpuCore = sources.FirstOrDefault(s => s.DisplayName.Contains("GPU Core"));
+        var globalFallback = cpuPackage ?? sources.FirstOrDefault();
+        var normalizedSources = 0;
 
         foreach (var fan in _hardware.Fans)
         {
             var cfg = _config.GetOrCreate(fan);
-            if (string.IsNullOrWhiteSpace(cfg.SourceId))
-                cfg.SourceId = preferred?.Id ?? "";
-            var row = new FanRow(fan, cfg, sources);
+            var allowed = BuildAllowedSources(fan, sources, cpuPackage, gpuCore);
+
+            // 显卡风扇永久绑定 GPU Core；主板风扇只允许 CPU Package / GPU Core，
+            // 历史配置里指向 P/E 核、Hotspot 等细节传感器时回落到 CPU Package。
+            var forced = fan.IsGpu
+                ? allowed.FirstOrDefault()
+                : allowed.FirstOrDefault(s => string.Equals(s.Id, cfg.SourceId, StringComparison.Ordinal)) ?? allowed.FirstOrDefault();
+            if (forced is not null && !string.Equals(cfg.SourceId, forced.Id, StringComparison.Ordinal))
+            {
+                cfg.SourceId = forced.Id;
+                normalizedSources++;
+            }
+            else if (string.IsNullOrWhiteSpace(cfg.SourceId) && globalFallback is not null)
+            {
+                cfg.SourceId = globalFallback.Id;
+                normalizedSources++;
+            }
+
+            var row = new FanRow(fan, cfg, allowed, canSelectSource: !fan.IsGpu);
             // 兜底拦截：键盘 ↑↓ / PageUp / 滚轮 等绕过鼠标 Preview 的修改路径也会走 setter。
             // 锁定通道同样拦截：内置场景生效期间任何热设置都不应被改动，否则会出现「预设 + 已修改」的矛盾状态。
             row.EditGuard = PresetEditAllowed;
@@ -211,6 +273,7 @@ public partial class MainWindow : Window
         }
 
         ChannelCountText.Text = $"{_rows.Count} 个通道";
+        return normalizedSources;
     }
 
     private void OnTick(object? sender, EventArgs e)
@@ -743,24 +806,21 @@ public partial class MainWindow : Window
     /// </summary>
     private int RepairMissingSources()
     {
-        TemperatureSource? preferred = null;
-        foreach (var row in _rows)
-        {
-            preferred = row.Sources.FirstOrDefault(s => s.DisplayName.Contains("CPU Package"))
-                        ?? row.Sources.FirstOrDefault(s => s.DisplayName.Contains("Core Max"));
-            if (preferred != null) break;
-        }
-        preferred ??= _rows.FirstOrDefault()?.Sources.FirstOrDefault();
-
         var repaired = 0;
         _suppressPresetEditGuard = true;
         try
         {
             foreach (var row in _rows)
             {
-                // 锁定通道不参与任何写入，也不应被自动修复逻辑改动
-                if (row.Protected) continue;
-                if (row.SelectedSource != null || preferred is null) continue;
+                // 温度源只是配置/展示，锁定通道也不参与 PWM 写入；这里同样补齐，
+                // 避免锁定行因升级后源被收敛而显示为空。
+                if (row.SelectedSource != null) continue;
+
+                var preferred = row.IsGpu
+                    ? row.Sources.FirstOrDefault(s => s.DisplayName.Contains("GPU Core")) ?? row.Sources.FirstOrDefault()
+                    : FindCpuTemperature(row.Sources) ?? row.Sources.FirstOrDefault();
+                if (preferred is null) continue;
+
                 row.SelectedSource = preferred;
                 repaired++;
             }
@@ -1181,10 +1241,8 @@ public partial class MainWindow : Window
         RefreshSceneBar();
     }
 
-    private void SettingsButton_Click(object sender, RoutedEventArgs e)
+    private void TitleBar_SettingsRequested(object? sender, EventArgs e)
     {
-        if (!_initialized) return;
-
         try
         {
             var dialog = new SettingsWindow { Owner = this };

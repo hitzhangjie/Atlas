@@ -52,6 +52,21 @@
         <!-- 状态 + 窗口按钮（需要可点击，必须标记为可命中标题栏） -->
         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Top"
                     WindowChrome.IsHitTestVisibleInChrome="True">
+            <!-- 全局设置入口：只有主窗口显式开启 ShowSettings 时才出现 -->
+            <Button x:Name="SettingsButton" Click="SettingsButton_Click" ToolTip="设置">
+                <Button.Style>
+                    <Style TargetType="Button" BasedOn="{StaticResource TitleBarButton}">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding ShowSettings, ElementName=Root}" Value="True">
+                                <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Button.Style>
+                <TextBlock Text="设置" FontSize="12" Foreground="#9FB4CF" VerticalAlignment="Center"/>
+            </Button>
+
             <Border x:Name="StatusChip"
                     Background="{StaticResource PanelRaisedBrush}"
                     BorderBrush="{StaticResource BorderSoftBrush}" BorderThickness="1"
