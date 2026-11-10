@@ -18,6 +18,13 @@ public partial class TitleBar : UserControl
     public static readonly DependencyProperty StatusTextProperty = DependencyProperty.Register(
         nameof(StatusText), typeof(string), typeof(TitleBar), new PropertyMetadata(string.Empty));
 
+    /// <summary>主窗口开启：标题栏右侧显示「设置」入口（弹窗不显示）。</summary>
+    public static readonly DependencyProperty ShowSettingsProperty = DependencyProperty.Register(
+        nameof(ShowSettings), typeof(bool), typeof(TitleBar), new PropertyMetadata(false));
+
+    /// <summary>用户点击标题栏「设置」。</summary>
+    public event EventHandler? SettingsRequested;
+
     public TitleBar()
     {
         InitializeComponent();
@@ -48,6 +55,15 @@ public partial class TitleBar : UserControl
         set => SetValue(StatusTextProperty, value);
     }
 
+    public bool ShowSettings
+    {
+        get => (bool)GetValue(ShowSettingsProperty);
+        set => SetValue(ShowSettingsProperty, value);
+    }
+
+    private void SettingsButton_Click(object sender, RoutedEventArgs e) =>
+        SettingsRequested?.Invoke(this, EventArgs.Empty);
+
     private Window? _window;
 
     private void OnLoaded(object sender, RoutedEventArgs e)
@@ -57,6 +73,10 @@ public partial class TitleBar : UserControl
         {
             _window.StateChanged += (_, _) => UpdateMaximizeIcon();
             UpdateMaximizeIcon();
+
+            // 固定尺寸窗口（如设置窗口）没有最大化意义，隐藏最大化按钮
+            if (_window.ResizeMode is ResizeMode.NoResize or ResizeMode.CanMinimize)
+                MaxButton.Visibility = Visibility.Collapsed;
         }
     }
 
