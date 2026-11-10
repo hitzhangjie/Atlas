@@ -51,6 +51,7 @@ run-atlas.cmd
 | 命令 | 产物 |
 | --- | --- |
 | `.\build.ps1` | 框架依赖 → `dist\`（体积最小，目标机需 .NET 8 Desktop Runtime） |
+| `.\build-branch.ps1` | 按**当前分支**构建：`main` → `dist\`，其他分支 → `dist-<分支>\`（参数与 `build.ps1` 一致） |
 | `.\build.ps1 -Mode SelfContained` | 自包含目录 → `dist\`（目标机免装运行时，体积较大） |
 | `.\build.ps1 -Mode SingleFile` | 自包含单文件 → `dist\Atlas.exe`（免装运行时，单文件） |
 | `.\build.ps1 -Mode SingleFile -Zip` | 同上，并在 `artifacts\` 生成 zip 压缩包 |
@@ -60,6 +61,8 @@ run-atlas.cmd
 
 说明：
 
+- **构建的是当前检出的分支，不固定 main**：`build.ps1` 构建脚本所在目录的当前分支；切分支后重新运行即可。使用 `git worktree` 时，请进入对应 worktree 目录运行那里的 `build.ps1`。
+- **按分支构建用 `build-branch.ps1`**：它会打印当前分支 @ commit、工作区/worktree 状态；不指定 `-Output` 时自动分目录（`main` → `dist\`，其他分支 → `dist-<分支>\`，不会覆盖正式版），输出不是 `dist` 时会自动 `-AllowRunning`，Atlas 运行中也能构建。产物 `ProductVersion` 带 commit hash，可用于核对构建的是哪个提交。
 - **构建前先关闭 Atlas**：`dist\` 里的 `Atlas.dll` / `Atlas.exe` 被运行时占用，发布会失败。不想手动关可以试 `-StopAtlas`，但普通窗口通常结束不了提权进程，建议手动关闭窗口后再构建。
 - 输出目录（默认 `dist\`）默认会整个清空后重新发布；**用户配置在 `%LocalAppData%\Atlas\config.json`，不受影响**。
 - `-Zip` 的压缩包在 `artifacts\Atlas-v<版本>-win-x64-<模式>.zip`，zip 内直接是 `Atlas.exe` 等文件，解压即用。

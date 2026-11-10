@@ -3,6 +3,7 @@ bin/
 obj/
 app/
 dist/
+dist-*/
 artifacts/
 *.user
 *.suo
