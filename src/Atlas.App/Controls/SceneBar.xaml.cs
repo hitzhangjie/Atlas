@@ -66,13 +66,20 @@ public partial class SceneBar : UserControl
     private readonly List<SceneBarChoiceItem> _choiceItems = new();
     private bool _suppressEvents;
     private bool _interactable = true;
+    private bool _isDirty;
     private string? _selectedChoiceId;
     private string _lastSignature = "\0";
     private string _choicesSignature = "\0";
 
+    // 「保存」只有存在未保存修改时才用主按钮高亮；无修改时降级为普通按钮并禁用。
+    private readonly Style _primaryButtonStyle;
+    private readonly Style _toolbarButtonStyle;
+
     public SceneBar()
     {
         InitializeComponent();
+        _primaryButtonStyle = (Style)FindResource("PrimaryButton");
+        _toolbarButtonStyle = (Style)FindResource("ToolbarButton");
         ApplyEnabledState();
     }
 
@@ -240,6 +247,7 @@ public partial class SceneBar : UserControl
 
     private void UpdateDirtyBadge(SceneBarViewState state)
     {
+        _isDirty = state.IsDirty;
         DirtyBadge.Visibility = state.IsDirty ? Visibility.Visible : Visibility.Collapsed;
         DirtyBadge.ToolTip = SelectedKind switch
         {
@@ -257,7 +265,10 @@ public partial class SceneBar : UserControl
         SaveAsProfileButton.IsEnabled = _interactable;
 
         var isProfile = SelectedKind == SceneBarChoiceKind.Profile;
-        SaveProfileButton.IsEnabled = _interactable && isProfile;
+        // 只有「当前是配置 + 有未保存修改」时才高亮可用；干净状态不提醒、也不允许无意义保存。
+        var canSave = _interactable && isProfile && _isDirty;
+        SaveProfileButton.IsEnabled = canSave;
+        SaveProfileButton.Style = canSave ? _primaryButtonStyle : _toolbarButtonStyle;
         RenameProfileButton.IsEnabled = _interactable && isProfile;
         DeleteProfileButton.IsEnabled = _interactable && isProfile;
     }

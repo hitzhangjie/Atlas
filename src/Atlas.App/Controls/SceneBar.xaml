@@ -101,7 +101,7 @@
                 <Button x:Name="SaveProfileButton" Style="{StaticResource PrimaryButton}"
                         Padding="11,5" Margin="0,0,4,0" Click="SaveProfileButton_Click"
                         ToolTipService.ShowOnDisabled="True"
-                        ToolTip="把当前修改保存到所选「我的配置」（内置场景不可保存）。">
+                        ToolTip="把当前修改保存到所选「我的配置」。没有未保存的修改时置灰。">
                     <StackPanel Orientation="Horizontal">
                         <Path Data="{StaticResource IconSave}" Style="{StaticResource IconPath}"
                               Stroke="{StaticResource AccentTextBrush}" Width="12" Height="12"
