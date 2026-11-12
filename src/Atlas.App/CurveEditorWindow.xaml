@@ -16,6 +16,14 @@
         <WindowChrome CaptionHeight="46" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
     </WindowChrome.WindowChrome>
 
+    <!-- 本窗口内的撤销/重做只覆盖「打开 → 确定/取消」之间的编辑；确定后由主界面记一步 -->
+    <Window.CommandBindings>
+        <CommandBinding Command="ApplicationCommands.Undo"
+                        CanExecute="Undo_CanExecute" Executed="Undo_Executed"/>
+        <CommandBinding Command="ApplicationCommands.Redo"
+                        CanExecute="Redo_CanExecute" Executed="Redo_Executed"/>
+    </Window.CommandBindings>
+
     <Border Background="{StaticResource BgBrush}" BorderBrush="#1C2838" BorderThickness="1">
         <Grid>
             <Grid.RowDefinitions>
@@ -39,7 +47,7 @@
                         <TextBlock Text="温度 → PWM 曲线" FontSize="15" FontWeight="SemiBold"
                                    Foreground="{StaticResource TextBrush}"/>
                         <TextBlock Margin="0,4,0,0" FontSize="11.5" Foreground="{StaticResource MutedBrush}"
-                                   Text="拖动圆点调整曲线 · 双击空白处添加控制点 · 右键删除控制点 · 两端按最近控制点保持"/>
+                                   Text="拖动圆点调整曲线 · 双击空白处添加控制点 · 右键删除控制点 · 两端按最近控制点保持 · Ctrl+Z / Ctrl+Y 撤销重做"/>
                     </StackPanel>
                     <Border Style="{StaticResource ChipBorder}" HorizontalAlignment="Right" VerticalAlignment="Center">
                         <StackPanel Orientation="Horizontal">
@@ -88,6 +96,14 @@
                 </Border>
 
                 <DockPanel Grid.Row="4" Margin="2,14,2,0">
+                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Left" VerticalAlignment="Center">
+                        <Button Content="撤销" Style="{StaticResource SmallGhostButton}" Padding="12,6"
+                                Margin="0,0,6,0" Command="ApplicationCommands.Undo"
+                                ToolTip="撤销本次曲线编辑 (Ctrl+Z)"/>
+                        <Button Content="重做" Style="{StaticResource SmallGhostButton}" Padding="12,6"
+                                Command="ApplicationCommands.Redo"
+                                ToolTip="重做本次曲线编辑 (Ctrl+Y)"/>
+                    </StackPanel>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button Content="取消" Style="{StaticResource GhostButton}" Padding="18,6" Margin="0,0,8,0"
                                 Click="Cancel_Click"/>

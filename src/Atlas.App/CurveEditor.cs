@@ -64,6 +64,9 @@ public sealed class CurveEditor : FrameworkElement
 
     public event EventHandler? PointsChanged;
 
+    /// <summary>一次完整用户编辑结束（拖拽松开 / 双击加点 / 右键删点），供撤销历史按「操作」记一步。</summary>
+    public event EventHandler? EditCompleted;
+
     public CurveEditor()
     {
         MinHeight = 260;
@@ -371,6 +374,7 @@ public sealed class CurveEditor : FrameworkElement
             ReleaseMouseCapture();
             InvalidateVisual();
             PointsChanged?.Invoke(this, EventArgs.Empty);
+            EditCompleted?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -385,6 +389,7 @@ public sealed class CurveEditor : FrameworkElement
         _hoverIndex = -1;
         InvalidateVisual();
         PointsChanged?.Invoke(this, EventArgs.Empty);
+        EditCompleted?.Invoke(this, EventArgs.Empty);
         e.Handled = true;
     }
 
