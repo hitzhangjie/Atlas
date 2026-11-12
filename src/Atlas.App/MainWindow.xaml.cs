@@ -46,6 +46,12 @@ public partial class MainWindow : Window
     // Atlas 自身在应用场景/配置、全部交由 BIOS 控制时也会改通道设置，必须绕过只读闸门
     private bool _suppressPresetEditGuard;
 
+    // 撤销 / 重做：历史只记录当前方案的热设置（模式/固定 PWM/温度源/上下限/曲线），
+    // 每个「用户操作」提交一步；程序化批量改写（应用场景、恢复快照等）期间用 _suppressHistory 屏蔽。
+    private readonly FanEditHistory _history = new();
+    private readonly DispatcherTimer _historyCommitTimer;
+    private bool _suppressHistory;
+
     // 底部状态栏：操作反馈优先显示几秒，空闲时只显示稳定的接管状态
     private DateTime _statusHoldUntil;
     private bool _updatingDefaultStatus;
@@ -56,6 +62,11 @@ public partial class MainWindow : Window
         WindowChromeHelper.Enable(this);
         StartupMark("InitializeComponent");
 
+        // 撤销 / 重做：滑块拖动会连续触发属性变化，安静 250ms 或鼠标释放后合并成「一步」。
+        // 先于鼠标事件订阅创建，避免构造期间事件早到导致空引用。
+        _historyCommitTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _historyCommitTimer.Tick += (_, _) => FlushHistoryOperation();
+
         // 下拉列表 / 单元格编辑 / 拖拽期间，把「会重建表格行容器」的过滤刷新延后，避免打断用户操作
         FanGrid.BeginningEdit += (_, _) => _viewGate?.NotifyEditStarted();
         FanGrid.CellEditEnding += (_, _) =>
@@ -63,8 +74,16 @@ public partial class MainWindow : Window
             _viewGate?.NotifyEditEnded();
             QueueFlushPendingViewRefresh();
         };
-        LostMouseCapture += (_, _) => QueueFlushPendingViewRefresh();
-        PreviewMouseUp += (_, _) => QueueFlushPendingViewRefresh();
+        LostMouseCapture += (_, _) =>
+        {
+            QueueFlushPendingViewRefresh();
+            FlushHistoryOperation();
+        };
+        PreviewMouseUp += (_, _) =>
+        {
+            QueueFlushPendingViewRefresh();
+            FlushHistoryOperation();
+        };
 
         _config = AtlasConfig.Load();
         StartupMark("config loaded");
@@ -151,6 +170,9 @@ public partial class MainWindow : Window
             _engine = new FanEngine(_hardware, _config);
             _timer.Start();
             _initialized = true;
+            // 撤销历史从「当前方案」开始：启动时没有可撤销的编辑
+            _history.Reset(_config.Fans);
+            UpdateHistoryUi();
             SetInteractionEnabled(true);
             RefreshSceneBar();
             StartupMark($"init complete, process→ready = {(DateTime.Now - ProcessStartTime).TotalMilliseconds:0}ms");
@@ -269,6 +291,7 @@ public partial class MainWindow : Window
             // 兜底拦截：键盘 ↑↓ / PageUp / 滚轮 等绕过鼠标 Preview 的修改路径也会走 setter。
             // 锁定通道同样拦截：内置场景生效期间任何热设置都不应被改动，否则会出现「预设 + 已修改」的矛盾状态。
             row.EditGuard = PresetEditAllowed;
+            row.PropertyChanged += OnRowPropertyChanged;
             _rows.Add(row);
         }
 
@@ -612,7 +635,11 @@ public partial class MainWindow : Window
         {
             var dialog = new CurveEditorWindow(row.Name, row.GetCurve()) { Owner = this };
             if (dialog.ShowDialog() == true)
+            {
                 row.SetCurve(dialog.ResultCurve);
+                // 一次「确定」= 一步撤销
+                CommitHistoryOperation();
+            }
         }
         catch (Exception ex)
         {
@@ -649,13 +676,24 @@ public partial class MainWindow : Window
 
             var selected = dialog.SelectedNames.ToHashSet();
             var applied = 0;
-            foreach (var row in _rows)
+            // 一次「复制曲线」批量改多个通道 = 一步撤销
+            _suppressHistory = true;
+            try
             {
-                if (ReferenceEquals(row, source) || !selected.Contains(row.Name)) continue;
-                row.SetCurve(source.GetCurve());
-                row.SelectedMode = row.Modes[2]; // 温度曲线
-                applied++;
+                foreach (var row in _rows)
+                {
+                    if (ReferenceEquals(row, source) || !selected.Contains(row.Name)) continue;
+                    row.SetCurve(source.GetCurve());
+                    row.SelectedMode = row.Modes[2]; // 温度曲线
+                    applied++;
+                }
             }
+            finally
+            {
+                _suppressHistory = false;
+            }
+
+            if (applied > 0) CommitHistoryOperation();
 
             StatusText.Text = $"已把「{source.Name}」的曲线应用到 {applied} 个通道（模式已切为温度曲线）";
         }
@@ -800,6 +838,109 @@ public partial class MainWindow : Window
         try { FanGrid.CommitEdit(DataGridEditingUnit.Row, true); } catch { }
     }
 
+    // ==================================================================
+    //  撤销 / 重做（当前方案的热设置）
+    // ==================================================================
+
+    /// <summary>
+    /// 行内热设置变化。粒度 = 用户操作：
+    ///  - 模式 / 温度源是离散选择 → 立即提交一步；
+    ///  - 固定 PWM 滑杆拖动会连续触发 → 等手势结束（鼠标释放）或安静 250ms 后合并成一步；
+    ///  - 曲线点由曲线编辑器 / 复制曲线显式提交，这里不处理。
+    /// </summary>
+    private void OnRowPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (_suppressHistory || !_initialized) return;
+
+        switch (e.PropertyName)
+        {
+            case nameof(FanRow.SelectedMode):
+            case nameof(FanRow.SelectedSource):
+                _historyCommitTimer.Stop();
+                CommitHistoryOperation();
+                break;
+
+            case nameof(FanRow.FixedPercent):
+                _historyCommitTimer.Stop();
+                _historyCommitTimer.Start();
+                break;
+        }
+    }
+
+    /// <summary>结束当前手势：把尚未提交的变化记为一步（鼠标释放 / 失去捕获时调用）。</summary>
+    private void FlushHistoryOperation()
+    {
+        if (!_historyCommitTimer.IsEnabled) return;
+        _historyCommitTimer.Stop();
+        CommitHistoryOperation();
+    }
+
+    /// <summary>把当前热设置提交为一步；与上一快照相同则忽略。</summary>
+    private void CommitHistoryOperation()
+    {
+        if (!_initialized || _suppressHistory) return;
+        if (_history.Record(_config.Fans)) UpdateHistoryUi();
+    }
+
+    /// <summary>切换来源 / 保存后重置历史：当前设置成为唯一基线，撤销与重做都不可用。</summary>
+    private void ResetHistoryToCurrent()
+    {
+        _historyCommitTimer.Stop();
+        _history.Reset(_config.Fans);
+        UpdateHistoryUi();
+    }
+
+    private void UpdateHistoryUi() => CommandManager.InvalidateRequerySuggested();
+
+    private void Undo_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+    {
+        e.CanExecute = _initialized && _history.CanUndo;
+        e.Handled = true;
+    }
+
+    private void Redo_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+    {
+        e.CanExecute = _initialized && _history.CanRedo;
+        e.Handled = true;
+    }
+
+    private void Undo_Executed(object sender, ExecutedRoutedEventArgs e) => StepHistory(undo: true);
+
+    private void Redo_Executed(object sender, ExecutedRoutedEventArgs e) => StepHistory(undo: false);
+
+    private void StepHistory(bool undo)
+    {
+        if (!_initialized) return;
+
+        // 表格里正在输入的内容先落地；未提交的滑杆手势不单独成步（撤销后回到手势前）
+        CommitPendingEdits();
+        _historyCommitTimer.Stop();
+
+        var changed = false;
+        _suppressHistory = true;
+        try
+        {
+            changed = undo ? _history.Undo(_config.Fans) : _history.Redo(_config.Fans);
+            if (changed)
+            {
+                foreach (var row in _rows) row.ReloadFromConfig();
+            }
+        }
+        finally
+        {
+            _suppressHistory = false;
+        }
+
+        if (!changed) return;
+
+        RefreshSceneBar();
+        UpdateHistoryUi();
+
+        StatusText.Text = undo
+            ? $"已撤销 · 还可撤销 {_history.UndoCount} 步"
+            : $"已重做 · 还可重做 {_history.RedoCount} 步";
+    }
+
     /// <summary>
     /// 场景/配置可能带回本机不存在的温度源 Id（换硬件、传感器改名）。
     /// 温度源失效 5 秒后引擎会全速兜底，所以这里把它修回默认 CPU 温度源，返回修复数量。
@@ -807,7 +948,9 @@ public partial class MainWindow : Window
     private int RepairMissingSources()
     {
         var repaired = 0;
+        var previousSuppressHistory = _suppressHistory;
         _suppressPresetEditGuard = true;
+        _suppressHistory = true;
         try
         {
             foreach (var row in _rows)
@@ -828,6 +971,7 @@ public partial class MainWindow : Window
         finally
         {
             _suppressPresetEditGuard = false;
+            _suppressHistory = previousSuppressHistory;
         }
 
         return repaired;
@@ -911,12 +1055,24 @@ public partial class MainWindow : Window
                 return;
             }
 
-            foreach (var row in _rows) row.ReloadFromConfig();
-            var repaired = RepairMissingSources();
-            // 温度源自动修复会改 SourceId，基线必须以修复后的设置为准，否则刚应用完就显示「已修改」
-            _config.StateFingerprint = _config.CurrentFingerprint();
+            var previousSuppressHistory = _suppressHistory;
+            _suppressHistory = true;
+            int repaired;
+            try
+            {
+                foreach (var row in _rows) row.ReloadFromConfig();
+                repaired = RepairMissingSources();
+                // 温度源自动修复会改 SourceId，基线必须以修复后的设置为准，否则刚应用完就显示「已修改」
+                _config.StateFingerprint = _config.CurrentFingerprint();
+            }
+            finally
+            {
+                _suppressHistory = previousSuppressHistory;
+            }
 
             _config.Save();
+            // 来源已切换：旧方案的编辑历史不再适用
+            ResetHistoryToCurrent();
             StatusText.Text = $"{result.Summary}（内置场景「{scene.Name}」）" +
                               (repaired > 0 ? $" · 已修复 {repaired} 个失效温度源" : "");
         }
@@ -956,12 +1112,24 @@ public partial class MainWindow : Window
                 return;
             }
 
-            foreach (var row in _rows) row.ReloadFromConfig();
-            var repaired = RepairMissingSources();
-            // 同场景：温度源修复后刷新基线，避免刚应用完就显示「已修改」
-            _config.StateFingerprint = _config.CurrentFingerprint();
+            var previousSuppressHistory = _suppressHistory;
+            _suppressHistory = true;
+            int repaired;
+            try
+            {
+                foreach (var row in _rows) row.ReloadFromConfig();
+                repaired = RepairMissingSources();
+                // 同场景：温度源修复后刷新基线，避免刚应用完就显示「已修改」
+                _config.StateFingerprint = _config.CurrentFingerprint();
+            }
+            finally
+            {
+                _suppressHistory = previousSuppressHistory;
+            }
 
             _config.Save();
+            // 来源已切换：旧方案的编辑历史不再适用
+            ResetHistoryToCurrent();
             StatusText.Text = result.Summary +
                               (repaired > 0 ? $" · 已修复 {repaired} 个失效温度源" : "");
         }
@@ -1007,6 +1175,8 @@ public partial class MainWindow : Window
             _config.Profiles.Add(profile);
             _config.MarkApplied(null, profile.Id);
             _config.Save();
+            // 来源已切换：从新的「我的配置」重新开始积累历史
+            ResetHistoryToCurrent();
 
             StatusText.Text = $"已复制为「我的配置 · {profile.Name}」，现在可以修改了";
             RefreshSceneBar();
@@ -1083,6 +1253,8 @@ public partial class MainWindow : Window
             _config.Profiles.Add(profile);
             _config.MarkApplied(null, profile.Id);
             _config.Save();
+            // 来源已切换：重新开始积累历史
+            ResetHistoryToCurrent();
 
             StatusText.Text = $"已另存为「{profile.Name}」";
             RefreshSceneBar();
@@ -1125,7 +1297,9 @@ public partial class MainWindow : Window
         {
             FanProfileService.UpdateProfile(_config, profile);
             _config.Save();
-            StatusText.Text = $"已保存配置「{profile.Name}」";
+            // 设计取舍：保存即清空撤销历史（历史只在两次保存之间有效）
+            ResetHistoryToCurrent();
+            StatusText.Text = $"已保存配置「{profile.Name}」· 撤销历史已清空";
             RefreshSceneBar();
         }
         catch (Exception ex)
@@ -1226,12 +1400,23 @@ public partial class MainWindow : Window
         // 全部交由 BIOS 控制 = 把所有通道模式批量改回「BIOS 默认」并交还控制权。
         // 若当前来源是「我的配置」，保留来源并显示「已修改」：点「保存」写回该配置，
         // 而不是把当前方案降级成「未归档」、逼用户另存成一个新配置。
-        var activeProfile = FanProfileService.RestoreToBiosDefaults(_config);
-        foreach (var row in _rows) row.ReloadFromConfig();
+        SavedProfile? activeProfile;
+        _suppressHistory = true;
+        try
+        {
+            activeProfile = FanProfileService.RestoreToBiosDefaults(_config);
+            foreach (var row in _rows) row.ReloadFromConfig();
+        }
+        finally
+        {
+            _suppressHistory = false;
+        }
 
         _engine?.RestoreAll();
 
         _config.Save();
+        // 一次「交给 BIOS」= 一步撤销（撤销会把控制权重新交回 Atlas）
+        CommitHistoryOperation();
 
         StatusText.Text = activeProfile is null
             ? "已全部交由 BIOS 控制"
@@ -1286,6 +1471,7 @@ public partial class MainWindow : Window
     {
         _closing = true;
         _timer.Stop();
+        _historyCommitTimer.Stop();
         _watchdog.Dispose();
         _config.Save();
         _engine?.Dispose();

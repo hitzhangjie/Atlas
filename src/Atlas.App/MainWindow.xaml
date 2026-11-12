@@ -16,6 +16,14 @@
         <WindowChrome CaptionHeight="46" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False"/>
     </WindowChrome.WindowChrome>
 
+    <!-- 撤销 / 重做：Ctrl+Z / Ctrl+Y 交给命令路由，文本框聚焦时仍由文本框自己的撤销处理 -->
+    <Window.CommandBindings>
+        <CommandBinding Command="ApplicationCommands.Undo"
+                        CanExecute="Undo_CanExecute" Executed="Undo_Executed"/>
+        <CommandBinding Command="ApplicationCommands.Redo"
+                        CanExecute="Redo_CanExecute" Executed="Redo_Executed"/>
+    </Window.CommandBindings>
+
     <Border Background="{StaticResource BgBrush}" BorderBrush="#1C2838" BorderThickness="1">
         <Grid>
             <Grid.RowDefinitions>
@@ -178,6 +186,28 @@
 
                             <!-- 右侧：操作类按钮 -->
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                <Button x:Name="UndoButton" Style="{StaticResource ToolbarButton}"
+                                        Command="ApplicationCommands.Undo" AutomationProperties.Name="撤销"
+                                        ToolTip="撤销 (Ctrl+Z)" Margin="0,0,4,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Path Data="{StaticResource IconUndo}" Style="{StaticResource IconPath}"
+                                              Stroke="#9FB4CF" Width="14" Height="14" Margin="0,0,6,0"
+                                              VerticalAlignment="Center"/>
+                                        <TextBlock Text="撤销" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+
+                                <Button x:Name="RedoButton" Style="{StaticResource ToolbarButton}"
+                                        Command="ApplicationCommands.Redo" AutomationProperties.Name="重做"
+                                        ToolTip="重做 (Ctrl+Y)" Margin="0,0,4,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Path Data="{StaticResource IconRedo}" Style="{StaticResource IconPath}"
+                                              Stroke="#9FB4CF" Width="14" Height="14" Margin="0,0,6,0"
+                                              VerticalAlignment="Center"/>
+                                        <TextBlock Text="重做" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+
                                 <Button x:Name="CopyCurveButton" Style="{StaticResource ToolbarButton}" AutomationProperties.Name="复制曲线"
                                         Click="CopyCurveButton_Click" Margin="0,0,4,0">
                                     <StackPanel Orientation="Horizontal">

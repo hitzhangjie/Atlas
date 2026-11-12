@@ -29,6 +29,7 @@ internal static class PresetSelfTest
         TestUpdateProfile();
         TestMissingAndUntouchedChannels();
         TestRestoreToBiosDefaults();
+        TestEditHistory();
 
         Console.WriteLine();
         Console.WriteLine($"结果：{_passed} 通过，{_failed} 失败");
@@ -452,6 +453,89 @@ internal static class PresetSelfTest
         Check("场景来源恢复后清空（只读场景无法写回）",
             noProfile is null && sceneConfig.ActiveSceneId is null && sceneConfig.ActiveProfileId is null);
         Check("场景恢复后不算「已修改」", !sceneConfig.IsCurrentStateModified());
+    }
+
+    private static void TestEditHistory()
+    {
+        Section("撤销 / 重做历史");
+
+        var config = new AtlasConfig();
+        config.Fans.Add(new FanCurveConfig
+        {
+            FanId = "fan-1", FanName = "Fan #1", Mode = FanMode.Fixed, FixedPercent = 40,
+            Protected = true, CustomName = "前风扇",
+        });
+        config.Fans.Add(new FanCurveConfig
+        {
+            FanId = "fan-2", FanName = "Fan #2", Mode = FanMode.Curve,
+            Curve = CurveTemplates.CloneCurve("quiet"),
+        });
+
+        var history = new FanEditHistory();
+        history.Reset(config.Fans);
+        Check("初始状态不可撤销/重做", !history.CanUndo && !history.CanRedo);
+
+        config.Fans[0].FixedPercent = 70;
+        Check("提交一次操作", history.Record(config.Fans));
+        Check("提交后可撤销", history.CanUndo && history.UndoCount == 1);
+
+        Check("撤销返回 true", history.Undo(config.Fans));
+        Check("撤销恢复旧值", Math.Abs(config.Fans[0].FixedPercent - 40) < 0.01f);
+        Check("撤销后可重做", history.CanRedo && history.RedoCount == 1);
+        Check("没有更多可撤销", !history.CanUndo);
+
+        Check("重做返回 true", history.Redo(config.Fans));
+        Check("重做恢复新值", Math.Abs(config.Fans[0].FixedPercent - 70) < 0.01f);
+        Check("重做到底后不可再重做", !history.CanRedo);
+
+        Check("状态未变化时不产生空步", !history.Record(config.Fans));
+
+        // 撤销后做新操作 → 重做分支被截断
+        history.Undo(config.Fans);
+        config.Fans[1].Curve = CurveTemplates.CloneCurve("performance");
+        Check("撤销后新操作被提交", history.Record(config.Fans));
+        Check("撤销后新操作截断重做分支", !history.CanRedo);
+
+        // 曲线也能被撤销/重做
+        Check("撤销曲线变更", history.Undo(config.Fans));
+        Check("撤销后曲线回到静音",
+            SameCurve(config.Fans[1].Curve, CurveTemplates.Get("quiet").Curve));
+
+        // 锁定 / 备注名不参与历史
+        var guarded = new AtlasConfig();
+        guarded.Fans.Add(new FanCurveConfig
+        {
+            FanId = "pump", FanName = "Fan #7", Mode = FanMode.Fixed, FixedPercent = 80,
+            Protected = true, CustomName = "水泵",
+        });
+        var guardedHistory = new FanEditHistory();
+        guardedHistory.Reset(guarded.Fans);
+        guarded.Fans[0].Mode = FanMode.Curve;
+        guardedHistory.Record(guarded.Fans);
+        guarded.Fans[0].Protected = false;
+        guarded.Fans[0].CustomName = "改名后";
+        guardedHistory.Undo(guarded.Fans);
+        Check("撤销恢复模式", guarded.Fans[0].Mode == FanMode.Fixed);
+        Check("撤销不改锁定状态", !guarded.Fans[0].Protected);
+        Check("撤销不改备注名", guarded.Fans[0].CustomName == "改名后");
+
+        // 上限：超出 MaxSteps 丢最旧
+        var capped = new AtlasConfig();
+        capped.Fans.Add(new FanCurveConfig { FanId = "f", Mode = FanMode.Fixed, FixedPercent = 0 });
+        var cappedHistory = new FanEditHistory();
+        cappedHistory.Reset(capped.Fans);
+        for (var i = 1; i <= FanEditHistory.MaxSteps + 10; i++)
+        {
+            capped.Fans[0].FixedPercent = i;
+            cappedHistory.Record(capped.Fans);
+        }
+        Check("历史步数不超过上限", cappedHistory.StepCount == FanEditHistory.MaxSteps,
+            $"{cappedHistory.StepCount}");
+        Check("上限内仍可撤销", cappedHistory.UndoCount == FanEditHistory.MaxSteps - 1);
+
+        // 保存后清空历史（App 层策略）：只剩基线，撤销/重做都不可用
+        cappedHistory.Reset(capped.Fans);
+        Check("Reset 后不可撤销/重做", !cappedHistory.CanUndo && !cappedHistory.CanRedo);
     }
 
     private static void Section(string name) => Console.WriteLine($"\n[{name}]");
